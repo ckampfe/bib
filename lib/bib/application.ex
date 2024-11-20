@@ -8,9 +8,10 @@ defmodule Bib.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: Bib.Worker.start_link(arg)
-      # {Bib.Worker, arg}
-      {Registry, keys: :unique, name: Bib.Registry},
+      {
+        Registry,
+        keys: :unique, name: Bib.Registry, partitions: System.schedulers_online()
+      },
       {Bib.TorrentsSupervisor, []}
     ]
 

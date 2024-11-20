@@ -16,11 +16,14 @@ defmodule Bib do
     :world
   end
 
-  def start_torrent(torrent_file) do
-    Bib.TorrentsSupervisor.start_child(%{torrent_file: torrent_file})
+  def start_torrent(torrent_file, download_location) do
+    Bib.TorrentsSupervisor.start_child(%{
+      torrent_file: torrent_file,
+      download_location: download_location
+    })
   end
 
   def s() do
-    start_torrent("/Users/clark/code/bib/a8dmfmt66t211.png.torrent")
+    start_torrent("/Users/clark/code/bib/a8dmfmt66t211.png.torrent", "/Users/clark/code/bib")
   end
 end

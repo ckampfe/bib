@@ -1,64 +1,66 @@
 # todo
-# - [ ] tcp listener to spawn peers
-# - [ ] peer: figure out what `choke` state means
-# - [ ] peer: figure out what `interested` state means
-# - [x] peer: send handshake
-# - [x] peer: receive handshake
-# - [ ] peer: handle `choke`
-# - [ ] peer: handle `unchoke`
-# - [ ] peer: handle `interested`
-# - [ ] peer: handle `not interested`
-# - [x] peer: handle `have`
-# - [x] peer: handle `bitfield`
-# - [ ] peer: handle `request`
-# - [ ] peer: handle `piece`
-# - [ ] peer: handle `cancel`
-# - [ ] torrent_state: broadcast `have` to all peer pids when we receive and checksum a piece
-# - [ ] send `have` message to remote peer when we have a piece
-
+# - [ ] tcp listener to spawn peers when remotes connect to us
+# - [x] figure out what `choke` state means
+# - [x] figure out what `interested` state means
+# - [x] send handshake
+# - [x] receive handshake
+# - [x] handle `choke`
+# - [x] handle `unchoke`
+# - [x] handle `interested`
+# - [x] handle `not interested`
+# - [x] handle `have`
+# - [x] handle `bitfield`
+# - [ ] handle `request`
+# - [ ] handle `piece`
+# - [ ] handle `cancel`
+# - [ ] send `interested` when we are interested
+# - [ ] send `not_interested` when we are not interested
+# - [ ] send `have` to torrent_state when we download/checksum piece
+# - [ ] figure out 16kB chunks for pieces
+# - [ ] file made of pieces (torrent-defined length) made of chunks (16kB length)
 defmodule Bib.Peer do
   @behaviour :gen_statem
 
-  alias Bib.{TorrentSupervisor}
+  alias Bib.{TorrentState, Bitfield, PeerSupervisor}
 
   require Logger
 
-  defstruct [
-    :torrent_file,
-    :socket,
-    :peer_id,
-    :remote_peer_address,
-    :remote_peer_id,
-    :info_hash,
-    :my_bitfield,
-    :peer_bitfield,
-    :pieces
-  ]
+  defmodule State do
+    defstruct peer_is_choking_me: true,
+              i_am_choking_peer: true,
+              peer_is_interested_in_me: false,
+              i_am_interested_in_peer: false
+  end
+
+  defmodule Data do
+    defstruct [
+      :torrent_file,
+      :download_location,
+      :socket,
+      :peer_id,
+      :remote_peer_address,
+      :remote_peer_id,
+      :info_hash,
+      :my_bitfield,
+      :peer_bitfield,
+      :pieces
+    ]
+  end
 
   @bittorrent_protocol_length_length 1
   @bittorrent_protocol_length 19
   @reserved_bytes_length 8
   @info_hash_length 20
-  @remote_peer_id_length 20
+  @peer_id_length 20
 
   @handshake_length @bittorrent_protocol_length_length +
                       @bittorrent_protocol_length +
                       @reserved_bytes_length +
                       @info_hash_length +
-                      @remote_peer_id_length
-
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [opts]},
-      type: :worker,
-      restart: :transient
-    }
-  end
+                      @peer_id_length
 
   def connect(torrent_file, peer_args) do
-    peer_supervisor = TorrentSupervisor.peer_supervisor(torrent_file)
-    Bib.PeerSupervisor.start_child(peer_supervisor, peer_args)
+    PeerSupervisor.start_child(torrent_file, peer_args)
   end
 
   @spec start_link(any()) :: :ignore | {:error, any()} | {:ok, pid()}
@@ -66,19 +68,33 @@ defmodule Bib.Peer do
     :gen_statem.start_link(__MODULE__, args, [])
   end
 
+  @doc """
+  send a message to `peer` asynchronously, with no reply
+  """
+  def cast(peer, message) do
+    :gen_statem.cast(peer, message)
+  end
+
   @impl :gen_statem
   def init(%{
         torrent_file: torrent_file,
+        download_location: download_location,
         remote_peer_address: peer_address,
         remote_peer_id: remote_peer_id,
         info_hash: info_hash,
         peer_id: peer_id,
         pieces: pieces
       }) do
-    state = %{choked: true, interested: false}
+    state = %State{
+      peer_is_choking_me: true,
+      i_am_choking_peer: true,
+      peer_is_interested_in_me: false,
+      i_am_interested_in_peer: false
+    }
 
-    data = %__MODULE__{
+    data = %Data{
       torrent_file: torrent_file,
+      download_location: download_location,
       remote_peer_address: peer_address,
       remote_peer_id: remote_peer_id,
       info_hash: info_hash,
@@ -92,7 +108,7 @@ defmodule Bib.Peer do
   end
 
   @impl :gen_statem
-  def handle_event(:internal, :connect_to_peer, %{choked: true, interested: false}, data) do
+  def handle_event(:internal, :connect_to_peer, _state, data) do
     {host, port} = data.remote_peer_address
 
     {:ok, ip} =
@@ -108,8 +124,7 @@ defmodule Bib.Peer do
       {:ok, socket} ->
         Logger.debug("connected to #{inspect(data.remote_peer_address)}")
 
-        {:keep_state, %__MODULE__{data | socket: socket},
-         [{:next_event, :internal, :send_handshake}]}
+        {:keep_state, %Data{data | socket: socket}, [{:next_event, :internal, :send_handshake}]}
 
       {:error, error} ->
         Logger.error(
@@ -135,7 +150,7 @@ defmodule Bib.Peer do
     {:keep_state_and_data, [{:next_event, :internal, :receive_handshake}]}
   end
 
-  def handle_event(:internal, :receive_handshake, %{choked: true, interested: false}, data) do
+  def handle_event(:internal, :receive_handshake, _state, data) do
     Logger.debug("waiting for handshake response")
 
     case :gen_tcp.recv(data.socket, @handshake_length) do
@@ -146,13 +161,14 @@ defmodule Bib.Peer do
           <<19, "BitTorrent protocol",
             _reserved_bytes_length::binary-size(@reserved_bytes_length),
             challenge_info_hash::binary-size(@info_hash_length),
-            remote_peer_id::binary-size(@remote_peer_id_length)>> ->
+            remote_peer_id::binary-size(@peer_id_length)>> ->
             Logger.debug("does info hash match? #{challenge_info_hash == data.info_hash}")
             Logger.debug("does expected peer id match? #{remote_peer_id == data.remote_peer_id}")
 
             if challenge_info_hash == data.info_hash &&
                  remote_peer_id ==
                    data.remote_peer_id do
+              Logger.debug("HANDSHAKE SUCCESSFUL")
               :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
               :keep_state_and_data
             else
@@ -161,8 +177,10 @@ defmodule Bib.Peer do
             end
 
           nonmatching_handshake ->
-            Logger.debug("did not receive correct handshake, shutting down.
-            Packet length was #{byte_size(nonmatching_handshake)}. expected #{@handshake_length}")
+            Logger.debug(
+              "did not receive correct handshake, shutting down. Packet length was #{byte_size(nonmatching_handshake)}. expected #{@handshake_length}"
+            )
+
             {:stop, :normal}
         end
 
@@ -186,52 +204,70 @@ defmodule Bib.Peer do
   end
 
   def handle_event(:info, {:tcp_closed, _socket}, _state, _data) do
-    Logger.debug("tcp closed")
+    Logger.debug("tcp closed, shutting down")
     {:stop, :normal}
   end
 
   # TODO
-  def handle_event(:internal, {:peer_message, :choke}, _state, data) do
+  def handle_event(:internal, {:peer_message, :choke}, state, data) do
     Logger.debug("received choke")
+    state = %State{state | peer_is_choking_me: true}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
-    :keep_state_and_data
+    {:next_state, state, data}
   end
 
   # TODO
-  def handle_event(:internal, {:peer_message, :unchoke}, _state, data) do
+  def handle_event(:internal, {:peer_message, :unchoke}, state, data) do
     Logger.debug("received unchoke")
+    state = %State{state | peer_is_choking_me: false}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
-    :keep_state_and_data
+    {:next_state, state, data}
   end
 
   # TODO
-  def handle_event(:internal, {:peer_message, :interested}, _state, data) do
+  def handle_event(:internal, {:peer_message, :interested}, state, data) do
     Logger.debug("received interested")
+    state = %State{state | peer_is_interested_in_me: true}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
-    :keep_state_and_data
+    {:next_state, state, data}
   end
 
   # TODO
-  def handle_event(:internal, {:peer_message, :not_interested}, _state, data) do
+  def handle_event(:internal, {:peer_message, :not_interested}, state, data) do
     Logger.debug("received not_interested")
+    state = %State{state | peer_is_interested_in_me: false}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
-    :keep_state_and_data
+    {:next_state, state, data}
   end
 
   def handle_event(:internal, {:peer_message, {:have, index}}, _state, data) do
-    data = %__MODULE__{data | peer_bitfield: set_bit(data.peer_bitfield, index)}
+    data = %Data{data | peer_bitfield: Bitfield.set_bit(data.peer_bitfield, index)}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     {:keep_state, data}
   end
 
   def handle_event(:internal, {:peer_message, {:bitfield, bitfield}}, _state, data) do
-    data = %__MODULE__{data | peer_bitfield: bitfield}
+    data = %Data{data | peer_bitfield: bitfield}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     {:keep_state, data}
   end
 
+  def handle_event(
+        :internal,
+        {:peer_message, {:request, _index, _begin, _length}},
+        %{i_am_choking_peer: true} = _state,
+        data
+      ) do
+    {:keep_state, data}
+  end
+
   # TODO what do we do here on choked vs unchoked?
-  def handle_event(:internal, {:peer_message, {:request, index, begin, length}}, _state, data) do
+  def handle_event(
+        :internal,
+        {:peer_message, {:request, index, begin, length}},
+        %{i_am_choking_peer: false} = _state,
+        data
+      ) do
     Logger.debug("received request: #{index}, #{begin}, #{length}")
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     {:keep_state, data}
@@ -239,7 +275,7 @@ defmodule Bib.Peer do
 
   def handle_event(:internal, {:peer_message, {:piece, index, begin, piece}}, _state, data) do
     Logger.debug("received piece: #{index}, #{begin}, and piece of length #{byte_size(piece)}")
-    {:ok, fd} = :file.open(data.torrent_file, [:write, :read, :raw, :binary])
+    {:ok, fd} = :file.open(data.download_location, [:write, :read, :raw, :binary])
 
     :ok = :file.pwrite(fd, begin, piece)
 
@@ -249,13 +285,13 @@ defmodule Bib.Peer do
 
     if :crypto.hash(:sha, bytes_written) == Enum.at(data.pieces, index) do
       Logger.debug("received piece #{index} and hashes match, sending have")
+      TorrentState.have(data.torrent_file, index)
     else
       Logger.debug("piece #{index} did not match hash")
     end
 
-    # TODO broadcast have to all other connected peers
-
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+
     {:keep_state, data}
   end
 
@@ -266,9 +302,14 @@ defmodule Bib.Peer do
   end
 
   def handle_event(:internal, {:peer_message, peer_message}, _state, data) do
-    Logger.debug("unhandled message: #{inspect(peer_message)}")
+    Logger.warning("unhandled message: #{inspect(peer_message)}")
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     :keep_state_and_data
+  end
+
+  def handle_event(:cast, {:have, index}, _state, %Data{} = data) do
+    data = %Data{data | my_bitfield: Bitfield.set_bit(data.my_bitfield, index)}
+    {:keep_state, data}
   end
 
   defp decode_peer_message(<<tag_byte, rest::binary>>) do
@@ -305,20 +346,17 @@ defmodule Bib.Peer do
     end
   end
 
-  # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
-  defp set_bit(bs, index) when is_bitstring(bs) do
-    <<a::bits-size(index), _::1, b::bits>> = bs
-    <<a::bits, 1::1, b::bits>>
-  end
-
-  # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
-  # defp unset_bit(bs, index) when is_bitstring(bs) do
-  #   <<a::bits-size(index), _::1, b::bits>> = bs
-  #   <<a::bits, 0::1, b::bits>>
-  # end
-
   @impl :gen_statem
   def callback_mode() do
     :handle_event_function
+  end
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :transient
+    }
   end
 end

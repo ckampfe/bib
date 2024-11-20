@@ -16,30 +16,30 @@ defmodule Bib.TorrentSupervisor do
       {Bib.TorrentState, init_arg}
     ]
 
-    Supervisor.init(children, strategy: :one_for_one)
+    Supervisor.init(children, strategy: :one_for_all)
   end
 
-  def torrent_state_worker(torrent_file) do
-    {_, pid, _, _} =
-      torrent_file
-      |> name()
-      |> Supervisor.which_children()
-      |> Enum.find(fn {module, _pid, _kind, _} -> module == Bib.TorrentState end)
+  # def torrent_state_worker(torrent_file) do
+  #   {_, pid, _, _} =
+  #     torrent_file
+  #     |> name()
+  #     |> Supervisor.which_children()
+  #     |> Enum.find(fn {module, _pid, _kind, _} -> module == Bib.TorrentState end)
 
-    pid
-  end
+  #   pid
+  # end
 
-  def peer_supervisor(torrent_file) do
-    {_, pid, _, _} =
-      torrent_file
-      |> name()
-      |> Supervisor.which_children()
-      |> Enum.find(fn {module, _pid, _kind, _} -> module == Bib.PeerSupervisor end)
+  # def peer_supervisor(torrent_file) do
+  #   {_, pid, _, _} =
+  #     torrent_file
+  #     |> name()
+  #     |> Supervisor.which_children()
+  #     |> Enum.find(fn {module, _pid, _kind, _} -> module == Bib.PeerSupervisor end)
 
-    pid
-  end
+  #   pid
+  # end
 
   def name(torrent_file) do
-    {:via, Registry, {Bib.Registry, torrent_file}}
+    {:via, Registry, {Bib.Registry, {__MODULE__, torrent_file}}}
   end
 end
