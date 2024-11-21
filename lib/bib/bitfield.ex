@@ -81,4 +81,14 @@ defmodule Bib.Bitfield do
 
   #   indexes
   # end
+  def population_count(bitset) do
+    for <<bit::1 <- bitset>>, reduce: 0 do
+      acc ->
+        if bit == 1 do
+          acc + 1
+        else
+          acc
+        end
+    end
+  end
 end

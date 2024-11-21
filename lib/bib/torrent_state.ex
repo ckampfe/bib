@@ -1,7 +1,7 @@
 # todo
 # - [ ] configurable max download concurrency
 # - [ ] configurable max upload concurrency
-# - [ ] verify local data on startup
+# - [x] verify local data on startup
 # - [ ] API to force verify of local data
 # - [ ] broadcast bitset to peer processes
 # - [ ] broadcast `have` to peer processes when we receive and checksum a piece
@@ -92,11 +92,72 @@ defmodule Bib.TorrentState do
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
   end
 
-  def handle_event(:internal, :verify_local_data, :initializing, data) do
+  def handle_event(:internal, :verify_local_data, :initializing, %Data{} = data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
+
+    download_filename = Path.join([data.download_location, MetaInfo.name(data.metainfo)])
+
+    if File.exists?(download_filename) do
+      {:ok, fd} = :file.open(download_filename, [:read, :raw])
+
+      Logger.debug("#{download_filename} exists, verifying")
+
+      piece_hashes = MetaInfo.pieces(data.metainfo)
+      number_of_pieces = bit_size(data.pieces)
+      normal_piece_length = MetaInfo.piece_length(data.metainfo)
+      last_piece_length = MetaInfo.last_piece_length(data.metainfo)
+
+      pieces =
+        piece_hashes
+        |> Stream.with_index()
+        |> Enum.reduce(data.pieces, fn {piece_hash, index}, pieces ->
+          offset = index * normal_piece_length
+
+          actual_piece_length =
+            if index == number_of_pieces - 1 do
+              last_piece_length
+            else
+              normal_piece_length
+            end
+
+          Logger.debug("reading piece {#{index}, #{offset}, #{actual_piece_length}}")
+
+          {:ok, piece} = :file.pread(fd, offset, actual_piece_length)
+
+          if :crypto.hash(:sha, piece) == piece_hash do
+            Bitfield.set_bit(pieces, index)
+          else
+            pieces
+          end
+        end)
+
+      have = Bitfield.population_count(pieces)
+
+      Logger.debug("have: #{have} pieces")
+      Logger.debug("want: #{number_of_pieces - have} pieces")
+
+      data = %Data{data | pieces: pieces}
+
+      {:keep_state, data, [{:next_event, :internal, :announce}]}
+    else
+      Logger.debug(
+        "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.metainfo)}"
+      )
+
+      {:ok, fd} =
+        :file.open(download_filename, [
+          :write,
+          :raw
+        ])
+
+      {:ok, _} = :file.position(fd, MetaInfo.length(data.metainfo))
+      :ok = :file.truncate(fd)
+
+      {:keep_state, data, [{:next_event, :internal, :announce}]}
+    end
+
     # data = %Data{data | pieces: <<>>}
     # TODO update with verified data
-    {:keep_state, data, [{:next_event, :internal, :announce}]}
   end
 
   def handle_event(:internal, :announce, :initializing, data) do
