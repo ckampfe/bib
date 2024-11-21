@@ -25,16 +25,22 @@ defmodule Bib.TorrentState do
   alias Bib.PeerSupervisor
   alias Bib.{Bencode, MetaInfo, Peer, Bitfield}
 
-  defstruct [
-    :metainfo,
-    :torrent_file,
-    :download_location,
-    :peer_id,
-    :port,
-    :announce_response,
-    :connected_peers,
-    :pieces
-  ]
+  defmodule State do
+    defstruct []
+  end
+
+  defmodule Data do
+    defstruct [
+      :metainfo,
+      :torrent_file,
+      :download_location,
+      :peer_id,
+      :port,
+      :announce_response,
+      :connected_peers,
+      :pieces
+    ]
+  end
 
   def start_link(args) do
     :gen_statem.start_link(name(args[:torrent_file]), __MODULE__, args, [])
@@ -61,12 +67,12 @@ defmodule Bib.TorrentState do
   def init(args) do
     Process.set_label("TorrentState for #{args[:torrent_file]}")
 
-    client_prefix = "-BB001-"
+    client_prefix = "-BR001-"
     # id = :rand.bytes(13)
     id = "abcdefghijklm"
     peer_id = client_prefix <> id
 
-    data = %__MODULE__{
+    data = %Data{
       torrent_file: args[:torrent_file],
       download_location: args[:download_location],
       peer_id: peer_id,
@@ -81,13 +87,15 @@ defmodule Bib.TorrentState do
     metainfo_binary = File.read!(data.torrent_file)
     {:ok, decoded, <<>>} = Bencode.decode(metainfo_binary)
     metainfo = MetaInfo.new(decoded)
-    data = %__MODULE__{data | metainfo: metainfo}
+    number_of_pieces = Enum.count(MetaInfo.pieces(metainfo))
+    data = %Data{data | metainfo: metainfo, pieces: <<0::size(number_of_pieces)>>}
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
   end
 
   def handle_event(:internal, :verify_local_data, :initializing, data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
-    data = %__MODULE__{data | pieces: <<>>}
+    # data = %Data{data | pieces: <<>>}
+    # TODO update with verified data
     {:keep_state, data, [{:next_event, :internal, :announce}]}
   end
 
@@ -111,7 +119,7 @@ defmodule Bib.TorrentState do
             )},
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
-      data = %__MODULE__{data | announce_response: decoded_announce_response}
+      data = %Data{data | announce_response: decoded_announce_response}
       {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
     else
       e ->
@@ -119,7 +127,7 @@ defmodule Bib.TorrentState do
     end
   end
 
-  def handle_event(:internal, :connect_to_peers, :started, data) do
+  def handle_event(:internal, :connect_to_peers, :started, %Data{} = data) do
     available_peers =
       data.announce_response
       |> Map.fetch!("peers")
@@ -131,14 +139,17 @@ defmodule Bib.TorrentState do
 
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
-        Peer.connect(data.torrent_file, %{
+        Peer.connect(data.torrent_file, %Peer.Args{
           torrent_file: data.torrent_file,
           download_location: data.download_location,
           remote_peer_address: {ip, port},
           remote_peer_id: remote_peer_id,
           info_hash: MetaInfo.info_hash(data.metainfo),
           peer_id: data.peer_id,
-          pieces: MetaInfo.pieces(data.metainfo)
+          pieces: data.pieces,
+          piece_hashes: MetaInfo.pieces(data.metainfo),
+          piece_length: MetaInfo.piece_length(data.metainfo),
+          last_piece_length: MetaInfo.last_piece_length(data.metainfo)
         })
 
       Logger.debug(inspect(conn))
@@ -148,7 +159,7 @@ defmodule Bib.TorrentState do
   end
 
   def handle_event({:call, _from}, {:have, index}, _state, data) do
-    data = %__MODULE__{data | pieces: Bitfield.set_bit(data.pieces, index)}
+    data = %Data{data | pieces: Bitfield.set_bit(data.pieces, index)}
     broadcast_async(data.torrent_file, {:have, index})
     {:keep_state, data}
   end

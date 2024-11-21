@@ -42,4 +42,18 @@ defmodule Bib.MetaInfo do
     encoded_info = Bencode.encode(info)
     :crypto.hash(:sha, encoded_info)
   end
+
+  def last_piece_length(%__MODULE__{} = self) do
+    number_of_pieces = Enum.count(pieces(self))
+    piece_length = piece_length(self)
+    file_length = __MODULE__.length(self)
+
+    # it's normal
+    if number_of_pieces * piece_length == file_length do
+      piece_length
+    else
+      # it's the last piece
+      file_length - (number_of_pieces - 1) * piece_length
+    end
+  end
 end
