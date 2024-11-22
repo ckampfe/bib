@@ -8,10 +8,12 @@ defmodule Bib.FileOps do
 
     0..(number_of_pieces - 1)
     |> Enum.reduce(<<0::size(number_of_pieces)>>, fn index, pieces ->
-      if piece_matches_expected_hash?(fd, index, metainfo) do
-        Bitfield.set_bit(pieces, index)
-      else
-        pieces
+      case piece_matches_expected_hash?(fd, index, metainfo) do
+        {:ok, true} ->
+          Bitfield.set_bit(pieces, index)
+
+        {:ok, false} ->
+          pieces
       end
     end)
   end
