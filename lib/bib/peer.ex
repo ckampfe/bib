@@ -21,12 +21,14 @@
 # - [ ] send `have` to torrent_state when we download/checksum piece
 # - [x] interest timer
 # - [x] keepalive timer
-# - [ ] figure out 16kB chunks for pieces
-# - [ ] file made of pieces (torrent-defined length) made of chunks (16kB length)
+# - [ ] figure out 16kB blocks for pieces
+# - [ ] file made of pieces (torrent-defined length) made of blocks (16kB length)
 defmodule Bib.Peer do
   @behaviour :gen_statem
 
-  alias Bib.{TorrentState, Bitfield, PeerSupervisor}
+  alias Bib.FileOps
+  alias Bib.{Torrent, Bitfield, PeerSupervisor, Utils}
+  alias Bib.Peer.Protocol
 
   require Logger
 
@@ -52,7 +54,8 @@ defmodule Bib.Peer do
       :piece_length,
       :last_piece_length,
       :interest_interval,
-      :keepalive_interval
+      :keepalive_interval,
+      :block_size
     ]
   end
 
@@ -67,7 +70,8 @@ defmodule Bib.Peer do
       :pieces,
       :piece_hashes,
       :piece_length,
-      :last_piece_length
+      :last_piece_length,
+      :block_size
     ]
   end
 
@@ -143,7 +147,8 @@ defmodule Bib.Peer do
     case :gen_tcp.connect(ip, port, [
            :binary,
            {:packet, 0},
-           {:active, false}
+           {:active, false},
+           {:send_timeout, :timer.seconds(5)}
          ]) do
       {:ok, socket} ->
         Logger.debug("connected to #{inspect(data.remote_peer_address)}")
@@ -251,9 +256,51 @@ defmodule Bib.Peer do
     {:next_state, state, data}
   end
 
-  # TODO
-  def handle_event(:internal, {:peer_message, :unchoke}, state, data) do
-    Logger.debug("received unchoke")
+  def handle_event(
+        :internal,
+        {:peer_message, :unchoke},
+        %State{i_am_interested_in_peer: true} = state,
+        data
+      ) do
+    Logger.debug("received unchoke, downloading")
+    state = %State{state | peer_is_choking_me: false}
+    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    {:next_state, state, data, [{:next_event, :internal, :request_blocks}]}
+  end
+
+  def handle_event(
+        :internal,
+        :request_blocks,
+        _state,
+        %Data{} = data
+      ) do
+    index = find_random_block_they_have_we_dont(data.my_pieces, data.peer_pieces)
+
+    requests = block_requests_for_piece(index, data.block_size)
+
+    for request <- requests do
+      encoded = Protocol.encode(request)
+      :gen_tcp.send(data.socket, encoded)
+    end
+
+    :keep_state_and_data
+  end
+
+  defp block_requests_for_piece(index, block_size) do
+    # {:request, index, begin, length}
+  end
+
+  defp find_random_block_they_have_we_dont(my_pieces, peer_pieces) do
+    1
+  end
+
+  def handle_event(
+        :internal,
+        {:peer_message, :unchoke},
+        %State{i_am_interested_in_peer: false} = state,
+        data
+      ) do
+    Logger.debug("received unchoke, still not interested, doing nothing")
     state = %State{state | peer_is_choking_me: false}
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     {:next_state, state, data}
@@ -309,7 +356,7 @@ defmodule Bib.Peer do
         %{i_am_choking_peer: false} = _state,
         data
       ) do
-    Logger.debug("received request: #{index}, #{begin}, #{length}")
+    Logger.debug("received request, sending block for: #{index}, #{begin}, #{length}")
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     {:keep_state, data}
   end
@@ -319,26 +366,19 @@ defmodule Bib.Peer do
       "received block for piece: #{index}, #{begin}, and block of length #{byte_size(block)}"
     )
 
-    {:ok, fd} = :file.open(data.download_location, [:write, :read, :raw, :binary])
+    case FileOps.write_block_and_verify_piece(
+           data.download_location,
+           data.metainfo,
+           index,
+           begin,
+           block
+         ) do
+      {:ok, true} ->
+        Logger.debug("received all of piece #{index} and hashes match, sending have")
+        Torrent.have(data.torrent_file, index)
 
-    :ok = :file.pwrite(fd, begin, block)
-
-    :ok = :file.sync(fd)
-
-    piece_length =
-      if index == Enum.count(data.pieces) - 1 do
-        data.last_piece_length
-      else
-        data.piece_length
-      end
-
-    {:ok, piece_data_on_disk} = :file.pread(fd, begin, piece_length)
-
-    if :crypto.hash(:sha, piece_data_on_disk) == Enum.at(data.pieces, index) do
-      Logger.debug("received all of piece #{index} and hashes match, sending have")
-      TorrentState.have(data.torrent_file, index)
-    else
-      Logger.debug("piece #{index} did not match hash")
+      {:ok, false} ->
+        Logger.debug("piece #{index} did not match hash, piece is not complete yet")
     end
 
     :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
@@ -362,7 +402,7 @@ defmodule Bib.Peer do
     if Bitfield.right_has_some_left_doesnt_have(data.my_pieces, data.peer_pieces) do
       # interested
 
-      encoded = Bib.Peer.Protocol.encode(:interested)
+      encoded = Protocol.encode(:interested)
 
       Logger.debug("sent interested")
 
@@ -385,7 +425,7 @@ defmodule Bib.Peer do
       # not interested
       Logger.debug("sending not interested")
 
-      encoded = Bib.Peer.Protocol.encode(:not_interested)
+      encoded = Protocol.encode(:not_interested)
 
       Logger.debug("sent not interested #{inspect(encoded)}")
 

@@ -66,12 +66,12 @@ defmodule Bib.Peer.Protocol do
           <<length::unsigned-integer-32>>
         ]
 
-      {:piece, index, begin, chunk} ->
+      {:piece, index, begin, block} ->
         [
           7,
           <<index::unsigned-integer-32>>,
           <<begin::unsigned-integer-32>>,
-          chunk
+          block
         ]
 
       {:cancel, index, begin, length} ->

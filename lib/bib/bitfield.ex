@@ -65,29 +65,13 @@ defmodule Bib.Bitfield do
   #   do_diff_bitstrings(left_rest, right_rest, <<acc::bits, diff::1>>)
   # end
 
-  # @doc """
-  # return the indexes in the bitset for the bits set to 1
-  # """
-  # def population_indexes(<<bitset::bits>>) do
-  #   {indexes, _} =
-  #     for <<bit::1 <- bitset>>, reduce: {[], 0} do
-  #       {indexes, i} ->
-  #         if bit == 1 do
-  #           {[i | indexes], i + 1}
-  #         else
-  #           {indexes, i + 1}
-  #         end
-  #     end
-
-  #   indexes
-  # end
-  def population_count(bitset) do
-    for <<bit::1 <- bitset>>, reduce: 0 do
+  def counts(bitset) do
+    for <<bit::1 <- bitset>>, reduce: %{have: 0, want: 0} do
       acc ->
         if bit == 1 do
-          acc + 1
+          Map.update!(acc, :have, fn have -> have + 1 end)
         else
-          acc
+          Map.update!(acc, :not_have, fn have -> have + 1 end)
         end
     end
   end
