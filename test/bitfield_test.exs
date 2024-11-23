@@ -13,4 +13,11 @@ defmodule BitfieldTest do
            |> Bitfield.set_bit(8)
            |> Bitfield.set_bit(9) == <<0, 192, 0, 0>>
   end
+
+  test "set_indexes/1" do
+    assert Bitfield.set_indexes(<<>>) == []
+    assert Bitfield.set_indexes(<<1::1>>) == [0]
+    assert Bitfield.set_indexes(<<0::1>>) == []
+    assert Bitfield.set_indexes(<<0::1, 1::1, 1::1, 0::1, 0::1, 1::1>>) == [5, 2, 1]
+  end
 end

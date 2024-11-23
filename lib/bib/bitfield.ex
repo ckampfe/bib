@@ -65,6 +65,23 @@ defmodule Bib.Bitfield do
   #   do_diff_bitstrings(left_rest, right_rest, <<acc::bits, diff::1>>)
   # end
 
+  @doc """
+  return a list of indexes where bits are set to 1
+  """
+  def set_indexes(<<bitstring::bits>>) do
+    do_set_indexes(bitstring, 0, [])
+  end
+
+  defp do_set_indexes(<<>>, _i, acc), do: acc
+
+  defp do_set_indexes(<<0::1, rest::bits>>, i, acc) do
+    do_set_indexes(rest, i + 1, acc)
+  end
+
+  defp do_set_indexes(<<1::1, rest::bits>>, i, acc) do
+    do_set_indexes(rest, i + 1, [i | acc])
+  end
+
   def counts(bitset) do
     for <<bit::1 <- bitset>>, reduce: %{have: 0, want: 0} do
       acc ->
