@@ -3,29 +3,31 @@ defmodule MetaInfoTest do
   alias Bib.MetaInfo
 
   test "metainfo" do
+    torrent_file = "The-Fanimatrix-(DivX-5.1-HQ).avi.torrent"
     file = File.read!("The-Fanimatrix-(DivX-5.1-HQ).avi.torrent")
     {:ok, m, _} = Bib.Bencode.decode(file)
 
     pieces = m |> get_in(["info", "pieces"])
 
-    mi = MetaInfo.new(m)
-    assert MetaInfo.announce(mi) == "http://kaos.gen.nz:6969/announce"
-    assert MetaInfo.length(mi) == 135_046_574
-    assert MetaInfo.name(mi) == "The-Fanimatrix-(DivX-5.1-HQ).avi"
-    assert MetaInfo.piece_length(mi) == 262_144
-    assert MetaInfo.pieces_raw(mi) == pieces
+    :ok = MetaInfo.new(torrent_file, m)
+    assert MetaInfo.announce(torrent_file) == "http://kaos.gen.nz:6969/announce"
+    assert MetaInfo.length(torrent_file) == 135_046_574
+    assert MetaInfo.name(torrent_file) == "The-Fanimatrix-(DivX-5.1-HQ).avi"
+    assert MetaInfo.piece_length(torrent_file) == 262_144
+    assert MetaInfo.pieces_raw(torrent_file) == pieces
 
-    assert Enum.all?(MetaInfo.pieces(mi), fn piece ->
+    assert Enum.all?(MetaInfo.pieces(torrent_file), fn piece ->
              byte_size(piece) == 20
            end)
   end
 
   test "blocks_for_piece/3" do
-    file = File.read!("The-Fanimatrix-(DivX-5.1-HQ).avi.torrent")
+    torrent_file = "The-Fanimatrix-(DivX-5.1-HQ).avi.torrent"
+    file = File.read!(torrent_file)
     {:ok, m, _} = Bib.Bencode.decode(file)
-    mi = MetaInfo.new(m)
+    :ok = MetaInfo.new(torrent_file, m)
 
-    assert MetaInfo.blocks_for_piece(mi, 0, 2 ** 14) ==
+    assert MetaInfo.blocks_for_piece(torrent_file, 0, 2 ** 14) ==
              [
                {0, 16384},
                {16384, 16384},
@@ -45,15 +47,16 @@ defmodule MetaInfoTest do
                {245_760, 16384}
              ]
 
-    file = File.read!("a8dmfmt66t211.png.torrent")
+    torrent_file = "a8dmfmt66t211.png.torrent"
+    file = File.read!(torrent_file)
     {:ok, m, _} = Bib.Bencode.decode(file)
-    mi = MetaInfo.new(m)
+    :ok = MetaInfo.new(torrent_file, m)
 
-    last_piece_length = MetaInfo.last_piece_length(mi)
+    last_piece_length = MetaInfo.last_piece_length(torrent_file)
 
-    assert MetaInfo.last_piece?(mi, 29)
+    assert MetaInfo.last_piece?(torrent_file, 29)
 
-    assert MetaInfo.blocks_for_piece(mi, 29, 2 ** 14) ==
+    assert MetaInfo.blocks_for_piece(torrent_file, 29, 2 ** 14) ==
              [{0, 16384}, {16384, last_piece_length - 16384}]
   end
 end

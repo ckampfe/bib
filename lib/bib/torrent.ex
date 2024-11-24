@@ -1,4 +1,5 @@
 # todo
+# - [ ] uploads/seeding
 # - [ ] configurable max download concurrency
 # - [ ] configurable max upload concurrency
 # - [x] verify local data on startup
@@ -31,13 +32,11 @@ defmodule Bib.Torrent do
 
   defmodule Data do
     defstruct [
-      :metainfo,
       :torrent_file,
       :download_location,
       :peer_id,
       :announce_response,
       :pieces,
-      # peer_db: %{},
       port: 6881 + :rand.uniform(2 ** 15 - 6881),
       max_uploads: 4,
       max_downloads: 4,
@@ -89,18 +88,18 @@ defmodule Bib.Torrent do
   def handle_event(:internal, :load_metainfo_file, :initializing, data) do
     metainfo_binary = File.read!(data.torrent_file)
     {:ok, decoded, <<>>} = Bencode.decode(metainfo_binary)
-    metainfo = MetaInfo.new(decoded)
-    number_of_pieces = Enum.count(MetaInfo.pieces(metainfo))
-    data = %Data{data | metainfo: metainfo, pieces: <<0::size(number_of_pieces)>>}
+    :ok = MetaInfo.new(data.torrent_file, decoded)
+    number_of_pieces = Enum.count(MetaInfo.pieces(data.torrent_file))
+    data = %Data{data | pieces: <<0::size(number_of_pieces)>>}
 
-    Logger.debug("Starting torrent for #{MetaInfo.name(metainfo)}")
+    Logger.debug("Starting torrent for #{MetaInfo.name(data.torrent_file)}")
 
     Logger.debug(
-      name: MetaInfo.name(metainfo),
-      piece_length: MetaInfo.piece_length(metainfo),
-      number_of_pieces: MetaInfo.number_of_pieces(metainfo),
-      length: MetaInfo.length(metainfo),
-      last_piece_length: MetaInfo.last_piece_length(metainfo)
+      name: MetaInfo.name(data.torrent_file),
+      piece_length: MetaInfo.piece_length(data.torrent_file),
+      number_of_pieces: MetaInfo.number_of_pieces(data.torrent_file),
+      length: MetaInfo.length(data.torrent_file),
+      last_piece_length: MetaInfo.last_piece_length(data.torrent_file)
     )
 
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
@@ -109,12 +108,12 @@ defmodule Bib.Torrent do
   def handle_event(:internal, :verify_local_data, :initializing, %Data{} = data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
 
-    download_filename = Path.join([data.download_location, MetaInfo.name(data.metainfo)])
+    download_filename = Path.join([data.download_location, MetaInfo.name(data.torrent_file)])
 
     if File.exists?(download_filename) do
       Logger.debug("#{download_filename} exists, verifying")
 
-      pieces = FileOps.verify_local_data(download_filename, data.metainfo)
+      pieces = FileOps.verify_local_data(data.torrent_file, download_filename)
 
       %{have: have, want: want} = Bitfield.counts(pieces)
 
@@ -126,10 +125,10 @@ defmodule Bib.Torrent do
       {:keep_state, data, [{:next_event, :internal, :announce}]}
     else
       Logger.debug(
-        "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.metainfo)}"
+        "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.torrent_file)}"
       )
 
-      FileOps.create_blank_file(download_filename, MetaInfo.length(data.metainfo))
+      FileOps.create_blank_file(download_filename, MetaInfo.length(data.torrent_file))
 
       {:keep_state, data, [{:next_event, :internal, :announce}]}
     end
@@ -139,8 +138,8 @@ defmodule Bib.Torrent do
   end
 
   def handle_event(:internal, :announce, :initializing, data) do
-    announce_url = MetaInfo.announce(data.metainfo)
-    info_hash = MetaInfo.info_hash(data.metainfo)
+    announce_url = MetaInfo.announce(data.torrent_file)
+    info_hash = MetaInfo.info_hash(data.torrent_file)
     peer_id = data.peer_id
     port = data.port
 
@@ -179,7 +178,6 @@ defmodule Bib.Torrent do
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
         Peer.connect(data.torrent_file, %Peer.Args{
-          metainfo: data.metainfo,
           torrent_file: data.torrent_file,
           download_location: data.download_location,
           remote_peer_address: {ip, port},
@@ -224,7 +222,7 @@ defmodule Bib.Torrent do
 
     %{have: have, want: want} = Bitfield.counts(data.pieces)
 
-    if want == 0 && have == MetaInfo.number_of_pieces(data.metainfo) do
+    if want == 0 && have == MetaInfo.number_of_pieces(data.torrent_file) do
       Logger.info("Complete!")
     end
 

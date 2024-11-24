@@ -42,7 +42,6 @@ defmodule Bib.Peer do
 
   defmodule Data do
     @enforce_keys [
-      :metainfo,
       :torrent_file,
       :download_location,
       :peer_id,
@@ -53,7 +52,6 @@ defmodule Bib.Peer do
     ]
 
     defstruct [
-      :metainfo,
       :torrent_file,
       :download_location,
       :socket,
@@ -70,7 +68,6 @@ defmodule Bib.Peer do
 
   defmodule Args do
     defstruct [
-      :metainfo,
       :torrent_file,
       :download_location,
       :remote_peer_address,
@@ -97,7 +94,9 @@ defmodule Bib.Peer do
     PeerSupervisor.start_child(torrent_file, peer_args)
   end
 
-  @spec start_link(any()) :: :ignore | {:error, any()} | {:ok, pid()}
+  def connect_with_socket() do
+  end
+
   def start_link(args) do
     :gen_statem.start_link(__MODULE__, args, [])
   end
@@ -119,7 +118,6 @@ defmodule Bib.Peer do
     }
 
     data = %Data{
-      metainfo: args.metainfo,
       torrent_file: args.torrent_file,
       download_location: args.download_location,
       remote_peer_address: args.remote_peer_address,
@@ -174,7 +172,7 @@ defmodule Bib.Peer do
         19,
         <<"BitTorrent protocol">>,
         <<0, 0, 0, 0, 0, 0, 0, 0>>,
-        MetaInfo.info_hash(data.metainfo),
+        MetaInfo.info_hash(data.torrent_file),
         data.peer_id
       ])
 
@@ -196,12 +194,12 @@ defmodule Bib.Peer do
             challenge_info_hash::binary-size(@info_hash_length),
             remote_peer_id::binary-size(@peer_id_length)>> ->
             Logger.debug(
-              "does info hash match? #{challenge_info_hash == MetaInfo.info_hash(data.metainfo)}"
+              "does info hash match? #{challenge_info_hash == MetaInfo.info_hash(data.torrent_file)}"
             )
 
             Logger.debug("does expected peer id match? #{remote_peer_id == data.remote_peer_id}")
 
-            if challenge_info_hash == MetaInfo.info_hash(data.metainfo) &&
+            if challenge_info_hash == MetaInfo.info_hash(data.torrent_file) &&
                  remote_peer_id ==
                    data.remote_peer_id do
               Logger.debug("HANDSHAKE SUCCESSFUL")
@@ -310,7 +308,7 @@ defmodule Bib.Peer do
         Logger.debug("randomly downloading piece #{index}")
 
         blocks =
-          MetaInfo.blocks_for_piece(data.metainfo, index, data.block_length)
+          MetaInfo.blocks_for_piece(data.torrent_file, index, data.block_length)
 
         requests =
           Enum.map(blocks, fn {offset, length} -> {:request, index, offset, length} end)
@@ -416,8 +414,8 @@ defmodule Bib.Peer do
     Logger.debug("received block for index #{index}, begin #{begin}, length #{byte_size(block)}")
 
     case FileOps.write_block_and_verify_piece(
-           Path.join([data.download_location, MetaInfo.name(data.metainfo)]),
-           data.metainfo,
+           Path.join([data.download_location, MetaInfo.name(data.torrent_file)]),
+           data.torrent_file,
            index,
            begin,
            block
