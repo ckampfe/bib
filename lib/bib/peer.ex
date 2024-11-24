@@ -16,15 +16,14 @@
 # - [x] handle `have`
 # - [x] handle `bitfield`
 # - [ ] handle `request`
-# - [ ] handle `piece`
+# - [x] handle `piece`
 # - [ ] handle `cancel`
-# - [ ] send `interested` when we are interested
-# - [ ] send `not_interested` when we are not interested
-# - [ ] send `have` to torrent_state when we download/checksum piece
+# - [x] send `interested` when we are interested
+# - [x] send `not_interested` when we are not interested
+# - [x] send `have` to torrent_state when we download/checksum piece
 # - [x] interest timer
 # - [x] keepalive timer
-# - [ ] figure out 16kB blocks for pieces
-# - [ ] file made of pieces (torrent-defined length) made of blocks (16kB length)
+# - [x] figure out 16kB blocks for pieces
 defmodule Bib.Peer do
   @behaviour :gen_statem
 

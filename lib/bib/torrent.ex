@@ -4,7 +4,7 @@
 # - [x] verify local data on startup
 # - [ ] API to force verify of local data
 # - [ ] broadcast bitset to peer processes
-# - [ ] broadcast `have` to peer processes when we receive and checksum a piece
+# - [x] broadcast `have` to peer processes when we receive and checksum a piece
 # - [ ] generate peer id on startup
 # - [ ] track global uploaded amount (receive upload reports from peers)
 # - [ ] track global downloaded amount (progress from completed pieces)
@@ -15,6 +15,7 @@
 # - [ ] timers to choke/unchoke peers
 # - [ ] timers to try to request pieces from different peers
 # - [ ] track individual peer upload/download
+# - [ ] optimize metainfo so that each peer doesn't need a copy
 #
 # Peer -> TorrentState API
 
