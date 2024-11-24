@@ -20,14 +20,16 @@ defmodule Bib.FileOps do
 
   def write_block_and_verify_piece(path, metainfo, index, begin, block) do
     with {:ok, fd} = :file.open(path, [:write, :read, :raw, :binary]),
-         :ok <- write_block(fd, begin, block),
+         :ok <- write_block(fd, metainfo, index, begin, block),
          {:ok, matches?} <- piece_matches_expected_hash?(fd, index, metainfo) do
       {:ok, matches?}
     end
   end
 
-  def write_block(fd, begin, block) do
-    with :ok <- :file.pwrite(fd, begin, block),
+  def write_block(fd, metainfo, index, begin, block) do
+    piece_offset = MetaInfo.piece_offset(metainfo, index)
+
+    with :ok <- :file.pwrite(fd, piece_offset + begin, block),
          :ok <- :file.sync(fd) do
       :ok
     end

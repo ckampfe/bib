@@ -98,4 +98,28 @@ defmodule Bib.MetaInfo do
   def piece_offset(%__MODULE__{} = self, index) when is_integer(index) do
     index * piece_length(self)
   end
+
+  def blocks_for_piece(%__MODULE__{} = self, index, block_length)
+      when is_integer(index) and is_integer(block_length) do
+    actual_piece_length = actual_piece_length(self, index)
+
+    number_of_full_blocks =
+      Kernel.floor(actual_piece_length / block_length)
+
+    nominal_piece_length = piece_length(self)
+
+    blocks =
+      for block_number <- 0..(number_of_full_blocks - 1) do
+        {block_number * block_length, block_length}
+      end
+
+    if actual_piece_length < nominal_piece_length do
+      {s_to_last_offset, s_to_last_length} = :lists.last(blocks)
+      last_block_length = actual_piece_length - (s_to_last_offset + s_to_last_length)
+
+      blocks ++ [{s_to_last_offset + s_to_last_length, last_block_length}]
+    else
+      blocks
+    end
+  end
 end

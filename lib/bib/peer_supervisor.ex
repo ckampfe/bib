@@ -18,7 +18,10 @@ defmodule Bib.PeerSupervisor do
   end
 
   def peers(torrent_file) do
-    DynamicSupervisor.which_children(name(torrent_file))
+    torrent_file
+    |> name()
+    |> DynamicSupervisor.which_children()
+    |> Enum.map(fn {:undefined, pid, :worker, [Bib.Peer]} -> pid end)
   end
 
   def name(torrent_file) do

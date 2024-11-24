@@ -44,26 +44,45 @@ defmodule Bib.Bitfield do
     end
   end
 
-  # def diff_bitstrings(left, right) when bit_size(left) == bit_size(right) do
-  #   do_diff_bitstrings(left, right, <<>>)
-  # end
+  def random_wanted_piece(peer_bitstring, my_bitstring) do
+    IO.inspect(peer_bitstring, label: "peer")
+    IO.inspect(my_bitstring, label: "me")
 
-  # defp do_diff_bitstrings(<<>>, <<>>, acc) do
-  #   acc
-  # end
+    diff_bitstrings(peer_bitstring, my_bitstring)
+    |> set_indexes()
+    |> then(fn
+      [] ->
+        nil
 
-  # defp do_diff_bitstrings(<<a::1, left_rest::bits>>, <<b::1, right_rest::bits>>, <<acc::bits>>) do
-  #   # <<0, 0, 0, 1>> - <<1, 0, 0, 0>>
-  #   # should be: <<0, 0, 0, 1>>
-  #   diff =
-  #     if a == 1 do
-  #       a - b
-  #     else
-  #       0
-  #     end
+      indexes ->
+        Enum.random(indexes)
+    end)
+  end
 
-  #   do_diff_bitstrings(left_rest, right_rest, <<acc::bits, diff::1>>)
-  # end
+  def diff_bitstrings(left, right) do
+    do_diff_bitstrings(left, right, <<>>)
+  end
+
+  defp do_diff_bitstrings(<<>>, _, acc) do
+    acc
+  end
+
+  defp do_diff_bitstrings(_, <<>>, acc) do
+    acc
+  end
+
+  defp do_diff_bitstrings(<<a::1, left_rest::bits>>, <<b::1, right_rest::bits>>, <<acc::bits>>) do
+    # <<0, 0, 0, 1>> - <<1, 0, 0, 0>>
+    # should be: <<0, 0, 0, 1>>
+    diff =
+      if a == 1 do
+        a - b
+      else
+        0
+      end
+
+    do_diff_bitstrings(left_rest, right_rest, <<acc::bits, diff::1>>)
+  end
 
   @doc """
   return a list of indexes where bits are set to 1
@@ -82,13 +101,14 @@ defmodule Bib.Bitfield do
     do_set_indexes(rest, i + 1, [i | acc])
   end
 
+  @spec counts(bitstring()) :: %{have: integer(), want: integer()}
   def counts(bitset) do
     for <<bit::1 <- bitset>>, reduce: %{have: 0, want: 0} do
       acc ->
         if bit == 1 do
           Map.update!(acc, :have, fn have -> have + 1 end)
         else
-          Map.update!(acc, :not_have, fn have -> have + 1 end)
+          Map.update!(acc, :want, fn have -> have + 1 end)
         end
     end
   end

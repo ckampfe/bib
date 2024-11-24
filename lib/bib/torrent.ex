@@ -41,7 +41,7 @@ defmodule Bib.Torrent do
       max_uploads: 4,
       max_downloads: 4,
       active_downloads: 0,
-      block_size: 2 ** 16
+      block_length: 2 ** 14
     ]
   end
 
@@ -91,6 +91,17 @@ defmodule Bib.Torrent do
     metainfo = MetaInfo.new(decoded)
     number_of_pieces = Enum.count(MetaInfo.pieces(metainfo))
     data = %Data{data | metainfo: metainfo, pieces: <<0::size(number_of_pieces)>>}
+
+    Logger.debug("Starting torrent for #{MetaInfo.name(metainfo)}")
+
+    Logger.debug(
+      name: MetaInfo.name(metainfo),
+      piece_length: MetaInfo.piece_length(metainfo),
+      number_of_pieces: MetaInfo.number_of_pieces(metainfo),
+      length: MetaInfo.length(metainfo),
+      last_piece_length: MetaInfo.last_piece_length(metainfo)
+    )
+
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
   end
 
@@ -167,17 +178,14 @@ defmodule Bib.Torrent do
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
         Peer.connect(data.torrent_file, %Peer.Args{
+          metainfo: data.metainfo,
           torrent_file: data.torrent_file,
           download_location: data.download_location,
           remote_peer_address: {ip, port},
           remote_peer_id: remote_peer_id,
-          info_hash: MetaInfo.info_hash(data.metainfo),
           peer_id: data.peer_id,
           pieces: data.pieces,
-          piece_hashes: MetaInfo.pieces(data.metainfo),
-          piece_length: MetaInfo.piece_length(data.metainfo),
-          last_piece_length: MetaInfo.last_piece_length(data.metainfo),
-          block_size: data.block_size
+          block_length: data.block_length
         })
 
       Logger.debug(inspect(conn))
@@ -193,10 +201,10 @@ defmodule Bib.Torrent do
     }
   end
 
-  def handle_event({:timeout, :choke_timer}, :ok, %State{} = state, %Data{} = data) do
-    Logger.debug("choke timer")
+  def handle_event({:timeout, :choke_timer}, :ok, %State{} = _state, %Data{} = data) do
+    # Logger.debug("choke timer")
 
-    peers = Bib.PeerSupervisor.peers(data.torrent_file)
+    _peers = Bib.PeerSupervisor.peers(data.torrent_file)
 
     # 1. get peers from sup
     # 1.
@@ -209,24 +217,18 @@ defmodule Bib.Torrent do
     }
   end
 
-  def handle_event({:call, _from}, {:have, index}, _state, %Data{} = data) do
+  def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do
     data = %Data{data | pieces: Bitfield.set_bit(data.pieces, index)}
     broadcast_async(data.torrent_file, {:have, index})
-    {:keep_state, data}
+
+    %{have: have, want: want} = Bitfield.counts(data.pieces)
+
+    if want == 0 && have == MetaInfo.number_of_pieces(data.metainfo) do
+      Logger.info("Complete!")
+    end
+
+    {:keep_state, data, [{:reply, from, :ok}]}
   end
-
-  # {:DOWN, ref, :process, object, reason}
-
-  # handle monitored peer going down,
-  # remove from peer_db
-  # def handle_event(:info, {:DOWN, _ref, :process, pid, _reason}, _state, %Data{} = data) do
-  #   data = %Data{data | active_downloads: data.active_downloads - 1}
-
-  #   {
-  #     :keep_state,
-  #     data
-  #   }
-  # end
 
   def name(torrent_file) do
     {:via, Registry, {Bib.Registry, {__MODULE__, torrent_file}}}

@@ -20,4 +20,8 @@ defmodule BitfieldTest do
     assert Bitfield.set_indexes(<<0::1>>) == []
     assert Bitfield.set_indexes(<<0::1, 1::1, 1::1, 0::1, 0::1, 1::1>>) == [5, 2, 1]
   end
+
+  test "diff_bitstrings/2" do
+    assert Bitfield.diff_bitstrings(<<0, 0, 0, 1>>, <<1, 0, 0, 0>>) == <<0, 0, 0, 1>>
+  end
 end
