@@ -1,14 +1,14 @@
 defmodule Bib.FileOps do
   alias Bib.{MetaInfo, Bitfield}
 
-  def verify_local_data(torrent_file, path) when is_binary(path) do
+  def verify_local_data(info_hash, path) when is_binary(path) do
     {:ok, fd} = :file.open(path, [:read, :raw])
 
-    number_of_pieces = MetaInfo.number_of_pieces(torrent_file)
+    number_of_pieces = MetaInfo.number_of_pieces(info_hash)
 
     0..(number_of_pieces - 1)
     |> Enum.reduce(<<0::size(number_of_pieces)>>, fn index, pieces ->
-      case piece_matches_expected_hash?(torrent_file, fd, index) do
+      case piece_matches_expected_hash?(info_hash, fd, index) do
         {:ok, true} ->
           Bitfield.set_bit(pieces, index)
 
@@ -18,16 +18,16 @@ defmodule Bib.FileOps do
     end)
   end
 
-  def write_block_and_verify_piece(torrent_file, path, index, begin, block) do
+  def write_block_and_verify_piece(info_hash, path, index, begin, block) do
     with {:ok, fd} = :file.open(path, [:write, :read, :raw, :binary]),
-         :ok <- write_block(fd, torrent_file, index, begin, block),
-         {:ok, matches?} <- piece_matches_expected_hash?(torrent_file, fd, index) do
+         :ok <- write_block(fd, info_hash, index, begin, block),
+         {:ok, matches?} <- piece_matches_expected_hash?(info_hash, fd, index) do
       {:ok, matches?}
     end
   end
 
-  def write_block(fd, torrent_file, index, begin, block) do
-    piece_offset = MetaInfo.piece_offset(torrent_file, index)
+  def write_block(fd, info_hash, index, begin, block) do
+    piece_offset = MetaInfo.piece_offset(info_hash, index)
 
     with :ok <- :file.pwrite(fd, piece_offset + begin, block),
          :ok <- :file.sync(fd) do
@@ -35,13 +35,13 @@ defmodule Bib.FileOps do
     end
   end
 
-  def piece_matches_expected_hash?(torrent_file, fd, index) do
-    piece_offset = index * MetaInfo.piece_length(torrent_file)
+  def piece_matches_expected_hash?(info_hash, fd, index) do
+    piece_offset = index * MetaInfo.piece_length(info_hash)
 
-    actual_piece_length = MetaInfo.actual_piece_length(torrent_file, index)
+    actual_piece_length = MetaInfo.actual_piece_length(info_hash, index)
 
     with {:ok, piece} <- :file.pread(fd, piece_offset, actual_piece_length),
-         piece_hash = Enum.at(MetaInfo.pieces(torrent_file), index) do
+         piece_hash = Enum.at(MetaInfo.pieces(info_hash), index) do
       {:ok, hash_piece(piece) == piece_hash}
     end
   end

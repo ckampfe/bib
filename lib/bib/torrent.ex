@@ -32,6 +32,7 @@ defmodule Bib.Torrent do
 
   defmodule Data do
     defstruct [
+      :info_hash,
       :torrent_file,
       :download_location,
       :peer_id,
@@ -46,6 +47,7 @@ defmodule Bib.Torrent do
   end
 
   def start_link(args) do
+    # TODO should this be named based on the info hash instead?
     :gen_statem.start_link(name(args[:torrent_file]), __MODULE__, args, [])
   end
 
@@ -88,18 +90,18 @@ defmodule Bib.Torrent do
   def handle_event(:internal, :load_metainfo_file, :initializing, data) do
     metainfo_binary = File.read!(data.torrent_file)
     {:ok, decoded, <<>>} = Bencode.decode(metainfo_binary)
-    :ok = MetaInfo.new(data.torrent_file, decoded)
-    number_of_pieces = Enum.count(MetaInfo.pieces(data.torrent_file))
-    data = %Data{data | pieces: <<0::size(number_of_pieces)>>}
+    info_hash = MetaInfo.new(decoded)
+    number_of_pieces = Enum.count(MetaInfo.pieces(info_hash))
+    data = %Data{data | info_hash: info_hash, pieces: <<0::size(number_of_pieces)>>}
 
-    Logger.debug("Starting torrent for #{MetaInfo.name(data.torrent_file)}")
+    Logger.debug("Starting torrent for #{MetaInfo.name(info_hash)}")
 
     Logger.debug(
-      name: MetaInfo.name(data.torrent_file),
-      piece_length: MetaInfo.piece_length(data.torrent_file),
-      number_of_pieces: MetaInfo.number_of_pieces(data.torrent_file),
-      length: MetaInfo.length(data.torrent_file),
-      last_piece_length: MetaInfo.last_piece_length(data.torrent_file)
+      name: MetaInfo.name(info_hash),
+      piece_length: MetaInfo.piece_length(info_hash),
+      number_of_pieces: MetaInfo.number_of_pieces(info_hash),
+      length: MetaInfo.length(info_hash),
+      last_piece_length: MetaInfo.last_piece_length(info_hash)
     )
 
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
@@ -108,12 +110,12 @@ defmodule Bib.Torrent do
   def handle_event(:internal, :verify_local_data, :initializing, %Data{} = data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
 
-    download_filename = Path.join([data.download_location, MetaInfo.name(data.torrent_file)])
+    download_filename = Path.join([data.download_location, MetaInfo.name(data.info_hash)])
 
     if File.exists?(download_filename) do
       Logger.debug("#{download_filename} exists, verifying")
 
-      pieces = FileOps.verify_local_data(data.torrent_file, download_filename)
+      pieces = FileOps.verify_local_data(data.info_hash, download_filename)
 
       %{have: have, want: want} = Bitfield.counts(pieces)
 
@@ -125,10 +127,10 @@ defmodule Bib.Torrent do
       {:keep_state, data, [{:next_event, :internal, :announce}]}
     else
       Logger.debug(
-        "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.torrent_file)}"
+        "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.info_hash)}"
       )
 
-      FileOps.create_blank_file(download_filename, MetaInfo.length(data.torrent_file))
+      FileOps.create_blank_file(download_filename, MetaInfo.length(data.info_hash))
 
       {:keep_state, data, [{:next_event, :internal, :announce}]}
     end
@@ -138,8 +140,7 @@ defmodule Bib.Torrent do
   end
 
   def handle_event(:internal, :announce, :initializing, data) do
-    announce_url = MetaInfo.announce(data.torrent_file)
-    info_hash = MetaInfo.info_hash(data.torrent_file)
+    announce_url = MetaInfo.announce(data.info_hash)
     peer_id = data.peer_id
     port = data.port
 
@@ -147,7 +148,7 @@ defmodule Bib.Torrent do
            {:announce_get,
             Req.get(announce_url,
               params: [
-                info_hash: info_hash,
+                info_hash: data.info_hash,
                 peer_id: peer_id,
                 port: port,
                 uploaded: 0,
@@ -178,6 +179,7 @@ defmodule Bib.Torrent do
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
         Peer.connect(data.torrent_file, %Peer.Args{
+          info_hash: data.info_hash,
           torrent_file: data.torrent_file,
           download_location: data.download_location,
           remote_peer_address: {ip, port},
@@ -222,7 +224,7 @@ defmodule Bib.Torrent do
 
     %{have: have, want: want} = Bitfield.counts(data.pieces)
 
-    if want == 0 && have == MetaInfo.number_of_pieces(data.torrent_file) do
+    if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
     end
 
