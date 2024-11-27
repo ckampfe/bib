@@ -2,24 +2,23 @@ defmodule Bib.TorrentSupervisor do
   use Supervisor
   require Logger
 
-  @spec start_link(any()) :: :ignore | {:error, any()} | {:ok, pid()}
-  def start_link(init_arg) do
-    Supervisor.start_link(__MODULE__, init_arg, name: name(init_arg[:torrent_file]))
+  def start_link(args) do
+    Supervisor.start_link(__MODULE__, args, name: name(args.info_hash))
   end
 
   @impl Supervisor
-  def init(init_arg) do
-    Process.set_label("TorrentSupervisor for #{init_arg[:torrent_file]}")
+  def init(args) do
+    Process.set_label("TorrentSupervisor for #{Path.basename(args[:torrent_file])}")
 
     children = [
-      {Bib.PeerSupervisor, init_arg},
-      {Bib.Torrent, init_arg}
+      {Bib.PeerSupervisor, args},
+      {Bib.Torrent, args}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)
   end
 
-  def name(torrent_file) do
-    {:via, Registry, {Bib.Registry, {__MODULE__, torrent_file}}}
+  def name(info_hash) do
+    {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 end

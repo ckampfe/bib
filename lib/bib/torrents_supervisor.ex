@@ -17,4 +17,9 @@ defmodule Bib.TorrentsSupervisor do
   def start_child(torrent_args) do
     DynamicSupervisor.start_child(__MODULE__, {Bib.TorrentSupervisor, torrent_args})
   end
+
+  def stop_child(info_hash) do
+    [{pid, _}] = Registry.lookup(Bib.Registry, {Bib.TorrentSupervisor, info_hash})
+    DynamicSupervisor.terminate_child(__MODULE__, pid)
+  end
 end

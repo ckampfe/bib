@@ -47,8 +47,7 @@ defmodule Bib.Torrent do
   end
 
   def start_link(args) do
-    # TODO should this be named based on the info hash instead?
-    :gen_statem.start_link(name(args[:torrent_file]), __MODULE__, args, [])
+    :gen_statem.start_link(name(args.info_hash), __MODULE__, args, [])
   end
 
   @doc """
@@ -62,15 +61,15 @@ defmodule Bib.Torrent do
     end)
   end
 
-  def have(torrent_file, index) do
-    torrent_file
+  def have(info_hash, index) do
+    info_hash
     |> name()
     |> :gen_statem.call({:have, index})
   end
 
   @impl :gen_statem
   def init(args) do
-    Process.set_label("Torrent for #{args[:torrent_file]}")
+    Process.set_label("Torrent for #{Path.basename(args[:torrent_file])}")
 
     client_prefix = "-BK0001-"
     # id = :rand.bytes(13)
@@ -78,6 +77,7 @@ defmodule Bib.Torrent do
     peer_id = client_prefix <> id
 
     data = %Data{
+      info_hash: args.info_hash,
       torrent_file: args[:torrent_file],
       download_location: args[:download_location],
       peer_id: peer_id
@@ -87,21 +87,18 @@ defmodule Bib.Torrent do
   end
 
   @impl :gen_statem
-  def handle_event(:internal, :load_metainfo_file, :initializing, data) do
-    metainfo_binary = File.read!(data.torrent_file)
-    {:ok, decoded, <<>>} = Bencode.decode(metainfo_binary)
-    info_hash = MetaInfo.new(decoded)
-    number_of_pieces = Enum.count(MetaInfo.pieces(info_hash))
-    data = %Data{data | info_hash: info_hash, pieces: <<0::size(number_of_pieces)>>}
+  def handle_event(:internal, :load_metainfo_file, :initializing, %Data{} = data) do
+    number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
+    data = %Data{data | pieces: <<0::size(number_of_pieces)>>}
 
-    Logger.debug("Starting torrent for #{MetaInfo.name(info_hash)}")
+    Logger.debug("Starting torrent for #{MetaInfo.name(data.info_hash)}")
 
     Logger.debug(
-      name: MetaInfo.name(info_hash),
-      piece_length: MetaInfo.piece_length(info_hash),
-      number_of_pieces: MetaInfo.number_of_pieces(info_hash),
-      length: MetaInfo.length(info_hash),
-      last_piece_length: MetaInfo.last_piece_length(info_hash)
+      name: MetaInfo.name(data.info_hash),
+      piece_length: MetaInfo.piece_length(data.info_hash),
+      number_of_pieces: MetaInfo.number_of_pieces(data.info_hash),
+      length: MetaInfo.length(data.info_hash),
+      last_piece_length: MetaInfo.last_piece_length(data.info_hash)
     )
 
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
@@ -178,7 +175,7 @@ defmodule Bib.Torrent do
 
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
-        Peer.connect(data.torrent_file, %Peer.Args{
+        Peer.connect(data.info_hash, %Peer.Args{
           info_hash: data.info_hash,
           torrent_file: data.torrent_file,
           download_location: data.download_location,
@@ -205,7 +202,7 @@ defmodule Bib.Torrent do
   def handle_event({:timeout, :choke_timer}, :ok, %State{} = _state, %Data{} = data) do
     # Logger.debug("choke timer")
 
-    _peers = Bib.PeerSupervisor.peers(data.torrent_file)
+    _peers = Bib.PeerSupervisor.peers(data.info_hash)
 
     # 1. get peers from sup
     # 1.
@@ -220,7 +217,7 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do
     data = %Data{data | pieces: Bitfield.set_bit(data.pieces, index)}
-    broadcast_async(data.torrent_file, {:have, index})
+    broadcast_async(data.info_hash, {:have, index})
 
     %{have: have, want: want} = Bitfield.counts(data.pieces)
 
@@ -231,8 +228,8 @@ defmodule Bib.Torrent do
     {:keep_state, data, [{:reply, from, :ok}]}
   end
 
-  def name(torrent_file) do
-    {:via, Registry, {Bib.Registry, {__MODULE__, torrent_file}}}
+  def name(info_hash) do
+    {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 
   @impl :gen_statem

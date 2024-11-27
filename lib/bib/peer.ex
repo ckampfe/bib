@@ -93,8 +93,8 @@ defmodule Bib.Peer do
                       @info_hash_length +
                       @peer_id_length
 
-  def connect(torrent_file, peer_args) do
-    PeerSupervisor.start_child(torrent_file, peer_args)
+  def connect(info_hash, peer_args) do
+    PeerSupervisor.start_child(info_hash, peer_args)
   end
 
   def connect_with_socket() do
@@ -145,14 +145,21 @@ defmodule Bib.Peer do
       |> to_charlist()
       |> :inet.parse_address()
 
-    case :gen_tcp.connect(ip, port, [
-           :binary,
-           {:packet, 0},
-           {:active, false},
-           {:send_timeout, :timer.seconds(5)}
-         ]) do
+    case :gen_tcp.connect(
+           ip,
+           port,
+           [
+             :binary,
+             {:packet, 0},
+             {:active, false},
+             {:send_timeout, :timer.seconds(5)},
+             {:send_timeout_close, true}
+           ],
+           :timer.seconds(5)
+         ) do
       {:ok, socket} ->
         Logger.debug("connected to #{inspect(data.remote_peer_address)}")
+        Process.set_label("Peer connection to #{inspect(data.remote_peer_address)}")
 
         {:keep_state, %Data{data | socket: socket}, [{:next_event, :internal, :send_handshake}]}
 
@@ -183,58 +190,40 @@ defmodule Bib.Peer do
   def handle_event(:internal, :receive_handshake, %State{} = _state, %Data{} = data) do
     Logger.debug("waiting for handshake response")
 
-    case :gen_tcp.recv(data.socket, @handshake_length) do
-      {:ok, packet} ->
-        Logger.debug("got handshake (raw): #{inspect(packet)}")
+    with {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}
+         when challenge_info_hash == data.info_hash and remote_peer_id == data.remote_peer_id <-
+           receive_handshake(data.socket) do
+      Logger.debug("HANDSHAKE SUCCESSFUL")
 
-        case packet do
-          <<19, "BitTorrent protocol",
-            _reserved_bytes_length::binary-size(@reserved_bytes_length),
-            challenge_info_hash::binary-size(@info_hash_length),
-            remote_peer_id::binary-size(@peer_id_length)>> ->
-            Logger.debug("does info hash match? #{challenge_info_hash == data.info_hash}")
+      :ok = set_socket_opts(data.socket)
 
-            Logger.debug("does expected peer id match? #{remote_peer_id == data.remote_peer_id}")
+      bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
+      Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
+      :gen_tcp.send(data.socket, bitfield_encoded)
 
-            if challenge_info_hash == data.info_hash &&
-                 remote_peer_id ==
-                   data.remote_peer_id do
-              Logger.debug("HANDSHAKE SUCCESSFUL")
+      {
+        :keep_state_and_data,
+        [
+          {{:timeout, :interest_timer}, data.interest_interval, :ok},
+          {{:timeout, :keepalive_timer}, data.keepalive_interval, :ok}
+        ]
+      }
+    else
+      {:error, :bad_handshake} ->
+        Logger.debug("did not receive correct handshake, shutting down.")
 
-              :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
-              bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
-              Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
-              :gen_tcp.send(data.socket, bitfield_encoded)
+        {:stop, :normal}
 
-              {
-                :keep_state_and_data,
-                [
-                  {{:timeout, :interest_timer}, data.interest_interval, :ok},
-                  {{:timeout, :keepalive_timer}, data.keepalive_interval, :ok}
-                ]
-              }
-            else
-              Logger.debug("info hashes or peer ids did not match, shutting down")
-              {:stop, :normal}
-            end
-
-          nonmatching_handshake ->
-            Logger.debug(
-              "did not receive correct handshake, shutting down. Packet length was #{byte_size(nonmatching_handshake)}. expected #{@handshake_length}"
-            )
-
-            {:stop, :normal}
-        end
-
-      {:error, error} ->
-        Logger.debug("got error: #{inspect(error)}")
-        :keep_state_and_data
+      {:error, e} ->
+        Logger.debug("error receiving handshake, shutting down: #{inspect(e)}")
+        {:stop, :normal}
     end
   end
 
   # keepalive
   def handle_event(:info, {:tcp, _socket, <<>>}, %State{} = _state, %Data{} = data) do
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    # :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     :keep_state_and_data
   end
 
@@ -254,7 +243,7 @@ defmodule Bib.Peer do
   def handle_event(:internal, {:peer_message, :choke}, %State{} = state, %Data{} = data) do
     Logger.debug("received choke")
     state = %State{state | peer_is_choking_me: true}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:next_state, state, data}
   end
 
@@ -266,7 +255,7 @@ defmodule Bib.Peer do
       ) do
     Logger.debug("received unchoke, downloading")
     state = %State{state | peer_is_choking_me: false}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:next_state, state, data, [{:next_event, :internal, :request_blocks}]}
   end
 
@@ -328,7 +317,7 @@ defmodule Bib.Peer do
       ) do
     Logger.debug("received unchoke, still not interested, doing nothing")
     state = %State{state | peer_is_choking_me: false}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:next_state, state, data}
   end
 
@@ -336,7 +325,7 @@ defmodule Bib.Peer do
   def handle_event(:internal, {:peer_message, :interested}, %State{} = state, %Data{} = data) do
     Logger.debug("received interested")
     state = %State{state | peer_is_interested_in_me: true}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:next_state, state, data}
   end
 
@@ -344,14 +333,14 @@ defmodule Bib.Peer do
   def handle_event(:internal, {:peer_message, :not_interested}, %State{} = state, %Data{} = data) do
     Logger.debug("received not_interested")
     state = %State{state | peer_is_interested_in_me: false}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:next_state, state, data}
   end
 
   def handle_event(:internal, {:peer_message, {:have, index}}, _state, %Data{} = data) do
     Logger.debug("received have from peer for index #{index}, updating peer bitfield")
     data = %Data{data | peer_pieces: Bitfield.set_bit(data.peer_pieces, index)}
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
 
@@ -368,11 +357,11 @@ defmodule Bib.Peer do
       if Bitfield.right_has_some_left_doesnt_have(data.my_pieces, data.peer_pieces) do
         Logger.debug("I am interested in peer due to bitfield")
         state = %State{state | i_am_interested_in_peer: true}
-        :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+        :ok = set_socket_opts(data.socket)
         {:next_state, state, data}
       else
         Logger.debug("I am not interested in peer due to bitfield")
-        :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+        :ok = set_socket_opts(data.socket)
         {:keep_state, data}
       end
     else
@@ -398,7 +387,7 @@ defmodule Bib.Peer do
         %Data{} = data
       ) do
     Logger.debug("received request, sending block for: #{index}, #{begin}, #{length}")
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
 
@@ -422,17 +411,17 @@ defmodule Bib.Peer do
           "received all of piece #{index} and hashes match, sending have to Torrent process, and downloading another piece"
         )
 
-        :ok = Torrent.have(data.torrent_file, index)
+        :ok = Torrent.have(data.info_hash, index)
 
         data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
 
-        :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+        :ok = set_socket_opts(data.socket)
 
         {:keep_state, data, [{:next_event, :internal, :request_blocks}]}
 
       {:ok, false} ->
         Logger.debug("piece #{index} did not match hash, piece is not complete yet")
-        :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+        :ok = set_socket_opts(data.socket)
         {:keep_state, data}
     end
   end
@@ -444,7 +433,7 @@ defmodule Bib.Peer do
         %Data{} = data
       ) do
     Logger.debug("received cancel: #{index}, #{begin}, #{length}")
-    :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
+    :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
 
@@ -523,6 +512,21 @@ defmodule Bib.Peer do
     {:keep_state, data}
   end
 
+  defp receive_handshake(socket) do
+    with {_, {:ok, packet}} <-
+           {:tcp, :gen_tcp.recv(socket, @handshake_length, :timer.seconds(5))},
+         {_,
+          <<19, "BitTorrent protocol",
+            _reserved_bytes_length::binary-size(@reserved_bytes_length),
+            challenge_info_hash::binary-size(@info_hash_length),
+            remote_peer_id::binary-size(@peer_id_length)>>} <- {:handshake, packet} do
+      {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}
+    else
+      {:tcp, e} -> e
+      {:handshake, _} -> {:error, :bad_handshake}
+    end
+  end
+
   @impl :gen_statem
   def callback_mode() do
     :handle_event_function
@@ -535,5 +539,15 @@ defmodule Bib.Peer do
       type: :worker,
       restart: :transient
     }
+  end
+
+  def set_socket_opts(socket) do
+    :inet.setopts(socket, [
+      :binary,
+      {:packet, 4},
+      {:active, :once},
+      {:send_timeout, :timer.seconds(5)},
+      {:send_timeout_close, true}
+    ])
   end
 end
