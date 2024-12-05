@@ -7,12 +7,16 @@ defmodule Bib.Application do
 
   @impl true
   def start(_type, _args) do
+    # port = 6881 + :rand.uniform(2 ** 15 - 6881)
+    port = 6881
+
     children = [
       {
         Registry,
         keys: :unique, name: Bib.Registry, partitions: System.schedulers_online()
       },
-      {Bib.TorrentsSupervisor, []}
+      {Bib.Peer.IncomingSupervisor, acceptors: System.schedulers_online(), port: port},
+      {Bib.TorrentsSupervisor, %{port: port}}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

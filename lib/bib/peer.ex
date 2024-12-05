@@ -3,7 +3,7 @@
 # TORRENTS have PIECES which have BLOCKS
 #
 # todo
-# - [ ] tcp listener to spawn peers when remotes connect to us
+# - [x] tcp listener to spawn peers when remotes connect to us
 # - [x] figure out what `choke` state means
 # - [x] figure out what `interested` state means
 # - [x] send handshake
@@ -15,7 +15,7 @@
 # - [x] handle `not interested`
 # - [x] handle `have`
 # - [x] handle `bitfield`
-# - [ ] handle `request`
+# - [x] handle `request`
 # - [x] handle `piece`
 # - [ ] handle `cancel`
 # - [x] send `interested` when we are interested
@@ -24,6 +24,7 @@
 # - [x] interest timer
 # - [x] keepalive timer
 # - [x] figure out 16kB blocks for pieces
+# - [ ] report download and upload to torrent state process
 defmodule Bib.Peer do
   @behaviour :gen_statem
 
@@ -41,15 +42,15 @@ defmodule Bib.Peer do
   end
 
   defmodule Data do
-    @enforce_keys [
-      :torrent_file,
-      :download_location,
-      :peer_id,
-      :remote_peer_address,
-      :remote_peer_id,
-      :my_pieces,
-      :block_length
-    ]
+    # @enforce_keys [
+    #   :torrent_file,
+    #   :download_location,
+    #   :peer_id,
+    #   :remote_peer_address,
+    #   :remote_peer_id,
+    #   :my_pieces,
+    #   :block_length
+    # ]
 
     defstruct [
       :info_hash,
@@ -81,6 +82,18 @@ defmodule Bib.Peer do
     ]
   end
 
+  defmodule AcceptArgs do
+    @enforce_keys [:info_hash, :socket, :peer_id, :remote_peer_id, :remote_peer_address]
+    defstruct [
+      :info_hash,
+      :socket,
+      :peer_id,
+      :download_location,
+      :remote_peer_id,
+      :remote_peer_address
+    ]
+  end
+
   @bittorrent_protocol_length_length 1
   @bittorrent_protocol_length 19
   @reserved_bytes_length 8
@@ -93,11 +106,23 @@ defmodule Bib.Peer do
                       @info_hash_length +
                       @peer_id_length
 
-  def connect(info_hash, peer_args) do
+  @connect_timeout :timer.seconds(5)
+  @receive_timeout :timer.seconds(5)
+  @send_timeout :timer.seconds(5)
+
+  @doc """
+  start a peer process to connect to a remote peer
+  """
+  def connect(info_hash, %Args{} = peer_args) when is_binary(info_hash) do
     PeerSupervisor.start_child(info_hash, peer_args)
   end
 
-  def connect_with_socket() do
+  @doc """
+  start a peer process for a connection that was initiated by the remote peer
+  """
+  def accept_remote_peer_connection(info_hash, %AcceptArgs{} = accept_args)
+      when is_binary(info_hash) do
+    PeerSupervisor.start_child(info_hash, accept_args)
   end
 
   def start_link(args) do
@@ -107,8 +132,20 @@ defmodule Bib.Peer do
   @doc """
   send a message to `peer` asynchronously, with no reply
   """
-  def cast(peer, message) do
+  def cast(peer, message) when is_pid(peer) do
     :gen_statem.cast(peer, message)
+  end
+
+  def choke(peer) when is_pid(peer) do
+    :gen_statem.cast(peer, :choke)
+  end
+
+  def unchoke(peer) when is_pid(peer) do
+    :gen_statem.cast(peer, :unchoke)
+  end
+
+  def handshake_peer(peer) when is_pid(peer) do
+    :gen_statem.call(peer, :send_handshake)
   end
 
   @impl :gen_statem
@@ -137,6 +174,43 @@ defmodule Bib.Peer do
   end
 
   @impl :gen_statem
+  def init(%AcceptArgs{} = args) do
+    Process.set_label("Peer connection to #{inspect(args.remote_peer_address)}")
+
+    state = %State{}
+
+    data = %Data{
+      info_hash: args.info_hash,
+      socket: args.socket,
+      download_location: args.download_location,
+      peer_id: args.peer_id,
+      remote_peer_id: args.remote_peer_id,
+      peer_pieces: Bitfield.new_padded(MetaInfo.number_of_pieces(args.info_hash))
+    }
+
+    {:ok, state, data,
+     [
+       {{:timeout, :keepalive_timer}, data.keepalive_interval, :ok}
+     ]}
+  end
+
+  def handle_event(:internal, :send_handshake, %State{} = _state, %Data{} = data) do
+    :ok = send_handshake(data.socket, data.info_hash, data.peer_id)
+    Logger.debug("sent handshake")
+    {:ok, pieces} = Torrent.get_pieces(data.info_hash)
+    data = %Data{data | my_pieces: pieces}
+    :ok = set_socket_opts(data.socket)
+    {:keep_state, data, [{:next_event, :internal, :send_bitfield}]}
+  end
+
+  def handle_event(:internal, :send_bitfield, %State{} = _state, %Data{} = data) do
+    bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
+    :gen_tcp.send(data.socket, bitfield_encoded)
+    Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
+    :keep_state_and_data
+  end
+
+  @impl :gen_statem
   def handle_event(:internal, :connect_to_peer, %State{} = _state, %Data{} = data) do
     {host, port} = data.remote_peer_address
 
@@ -152,16 +226,17 @@ defmodule Bib.Peer do
              :binary,
              {:packet, 0},
              {:active, false},
-             {:send_timeout, :timer.seconds(5)},
+             {:send_timeout, @send_timeout},
              {:send_timeout_close, true}
            ],
-           :timer.seconds(5)
+           @connect_timeout
          ) do
       {:ok, socket} ->
         Logger.debug("connected to #{inspect(data.remote_peer_address)}")
         Process.set_label("Peer connection to #{inspect(data.remote_peer_address)}")
 
-        {:keep_state, %Data{data | socket: socket}, [{:next_event, :internal, :send_handshake}]}
+        {:keep_state, %Data{data | socket: socket},
+         [{:next_event, :internal, :send_and_receive_handshake}]}
 
       {:error, error} ->
         Logger.error(
@@ -172,23 +247,10 @@ defmodule Bib.Peer do
     end
   end
 
-  def handle_event(:internal, :send_handshake, %State{} = _state, %Data{} = data) do
-    :ok =
-      :gen_tcp.send(data.socket, [
-        19,
-        <<"BitTorrent protocol">>,
-        <<0, 0, 0, 0, 0, 0, 0, 0>>,
-        data.info_hash,
-        data.peer_id
-      ])
+  def handle_event(:internal, :send_and_receive_handshake, %State{} = _state, %Data{} = data) do
+    :ok = send_handshake(data.socket, data.info_hash, data.peer_id)
 
     Logger.debug("sent handshake to #{inspect(data.remote_peer_address)}")
-
-    {:keep_state_and_data, [{:next_event, :internal, :receive_handshake}]}
-  end
-
-  def handle_event(:internal, :receive_handshake, %State{} = _state, %Data{} = data) do
-    Logger.debug("waiting for handshake response")
 
     with {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}
          when challenge_info_hash == data.info_hash and remote_peer_id == data.remote_peer_id <-
@@ -218,7 +280,13 @@ defmodule Bib.Peer do
         Logger.debug("error receiving handshake, shutting down: #{inspect(e)}")
         {:stop, :normal}
     end
+
+    # {:keep_state_and_data, [{:next_event, :internal, :receive_handshake}]}
   end
+
+  # def handle_event(:internal, :receive_handshake, %State{} = _state, %Data{} = data) do
+  #   Logger.debug("waiting for handshake response")
+  # end
 
   # keepalive
   def handle_event(:info, {:tcp, _socket, <<>>}, %State{} = _state, %Data{} = data) do
@@ -340,6 +408,7 @@ defmodule Bib.Peer do
   def handle_event(:internal, {:peer_message, {:have, index}}, _state, %Data{} = data) do
     Logger.debug("received have from peer for index #{index}, updating peer bitfield")
     data = %Data{data | peer_pieces: Bitfield.set_bit(data.peer_pieces, index)}
+    Logger.debug("#{inspect(Bitfield.counts(data.peer_pieces))}")
     :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
@@ -387,6 +456,33 @@ defmodule Bib.Peer do
         %Data{} = data
       ) do
     Logger.debug("received request, sending block for: #{index}, #{begin}, #{length}")
+
+    IO.inspect(data.download_location)
+    IO.inspect(MetaInfo.name(data.info_hash))
+
+    # {:ok, bytes_sent} =
+    # FileOps.send_block(
+    #   Path.join([data.download_location, MetaInfo.name(data.info_hash)]),
+    #   data.info_hash,
+    #   data.socket,
+    #   index,
+    #   begin,
+    #   length
+    # )
+    {:ok, block} =
+      FileOps.read_block(
+        data.info_hash,
+        Path.join([data.download_location, MetaInfo.name(data.info_hash)]),
+        index,
+        begin,
+        length
+      )
+
+    piece_message = Protocol.encode({:piece, index, begin, block})
+    :ok = :gen_tcp.send(data.socket, piece_message)
+
+    Logger.debug("sent #{:erlang.iolist_size(block)} to peer for #{index}, #{begin}, #{length}")
+
     :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
@@ -506,15 +602,48 @@ defmodule Bib.Peer do
     }
   end
 
+  def handle_event(:cast, :choke, %State{} = state, %Data{} = data) do
+    choke = Protocol.encode(:choke)
+    :gen_tcp.send(data.socket, choke)
+
+    {
+      :next_state,
+      %State{state | i_am_choking_peer: true},
+      data
+    }
+  end
+
+  def handle_event(:cast, :unchoke, %State{} = state, %Data{} = data) do
+    unchoke = Protocol.encode(:unchoke)
+    :gen_tcp.send(data.socket, unchoke)
+
+    {
+      :next_state,
+      %State{state | i_am_choking_peer: false},
+      data
+    }
+  end
+
   def handle_event(:cast, {:have, index}, %State{} = _state, %Data{} = data) do
     Logger.debug("received have from torrent, updating own bitfield")
     data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
     {:keep_state, data}
   end
 
-  defp receive_handshake(socket) do
+  def handle_event({:call, from}, :send_handshake, %State{} = _state, %Data{} = _data) do
+    {:keep_state_and_data,
+     [
+       {:reply, from, :ok},
+       {:next_event, :internal, :send_handshake}
+     ]}
+  end
+
+  @doc """
+  Note: socket MUST be in passive mode.
+  """
+  def receive_handshake(socket) do
     with {_, {:ok, packet}} <-
-           {:tcp, :gen_tcp.recv(socket, @handshake_length, :timer.seconds(5))},
+           {:tcp, :gen_tcp.recv(socket, @handshake_length, @receive_timeout)},
          {_,
           <<19, "BitTorrent protocol",
             _reserved_bytes_length::binary-size(@reserved_bytes_length),
@@ -523,8 +652,19 @@ defmodule Bib.Peer do
       {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}
     else
       {:tcp, e} -> e
-      {:handshake, _} -> {:error, :bad_handshake}
+      {:handshake, p} -> {:error, :bad_handshake, p}
     end
+  end
+
+  defp send_handshake(socket, info_hash, peer_id)
+       when is_binary(info_hash) and is_binary(peer_id) do
+    :gen_tcp.send(socket, [
+      19,
+      <<"BitTorrent protocol">>,
+      <<0, 0, 0, 0, 0, 0, 0, 0>>,
+      info_hash,
+      peer_id
+    ])
   end
 
   @impl :gen_statem
@@ -546,7 +686,7 @@ defmodule Bib.Peer do
       :binary,
       {:packet, 4},
       {:active, :once},
-      {:send_timeout, :timer.seconds(5)},
+      {:send_timeout, @send_timeout},
       {:send_timeout_close, true}
     ])
   end

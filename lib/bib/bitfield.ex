@@ -1,5 +1,10 @@
 defmodule Bib.Bitfield do
   # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
+
+  def new_padded(n) do
+    <<0::size(n)>> |> pad_to_binary()
+  end
+
   @spec set_bit(nonempty_bitstring(), non_neg_integer()) :: nonempty_bitstring()
   def set_bit(bitstring, index) when is_bitstring(bitstring) do
     <<a::bits-size(index), _::1, b::bits>> = bitstring
@@ -99,6 +104,23 @@ defmodule Bib.Bitfield do
 
   defp do_set_indexes(<<1::1, rest::bits>>, i, acc) do
     do_set_indexes(rest, i + 1, [i | acc])
+  end
+
+  @doc """
+  return a list of indexes where bits are set to 0
+  """
+  def unset_indexes(<<bitstring::bits>>) do
+    do_unset_indexes(bitstring, 0, [])
+  end
+
+  defp do_unset_indexes(<<>>, _i, acc), do: acc
+
+  defp do_unset_indexes(<<0::1, rest::bits>>, i, acc) do
+    do_unset_indexes(rest, i + 1, [i | acc])
+  end
+
+  defp do_unset_indexes(<<1::1, rest::bits>>, i, acc) do
+    do_unset_indexes(rest, i + 1, acc)
   end
 
   @spec counts(bitstring()) :: %{have: integer(), want: integer()}

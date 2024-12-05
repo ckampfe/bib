@@ -2,7 +2,8 @@ defmodule Bib.TorrentSupervisor do
   use Supervisor
   require Logger
 
-  def start_link(args) do
+  def start_link(extra_args, args) do
+    args = Map.merge(extra_args, args)
     Supervisor.start_link(__MODULE__, args, name: name(args.info_hash))
   end
 

@@ -1,5 +1,5 @@
 defmodule Bib.MetaInfo do
-  alias Bib.Bencode
+  alias Bib.{Bencode, Bitfield}
   defstruct [:inner]
 
   @doc """
@@ -74,6 +74,27 @@ defmodule Bib.MetaInfo do
   """
   def number_of_pieces(info_hash) when is_binary(info_hash) do
     round(__MODULE__.length(info_hash) / piece_length(info_hash))
+  end
+
+  @doc """
+  return the number of bytes remaining to finish the download
+  """
+  def left(info_hash, pieces) do
+    # we need:
+    # - the raw metainfo
+    # - the piece length
+    # - the last piece length
+    # - the indexes of the remaining pieces
+    unset_indexes = Bitfield.unset_indexes(pieces)
+
+    for index <- unset_indexes, reduce: 0 do
+      acc ->
+        if last_piece?(info_hash, index) do
+          acc + last_piece_length(info_hash)
+        else
+          acc + piece_length(info_hash)
+        end
+    end
   end
 
   @doc """

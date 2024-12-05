@@ -38,7 +38,7 @@ defmodule Bib.Torrent do
       :peer_id,
       :announce_response,
       :pieces,
-      port: 6881 + :rand.uniform(2 ** 15 - 6881),
+      :port,
       max_uploads: 4,
       max_downloads: 4,
       active_downloads: 0,
@@ -53,9 +53,12 @@ defmodule Bib.Torrent do
   @doc """
   send a message to all peers, asynchronously, with no reply
   """
-  def broadcast_async(torrent_file, message) do
-    peers = PeerSupervisor.peers(torrent_file)
+  def broadcast_async(info_hash, message) when is_binary(info_hash) do
+    peers = PeerSupervisor.peers(info_hash)
+    broadcast_async(peers, message)
+  end
 
+  def broadcast_async(peers, message) when is_list(peers) do
     Enum.each(peers, fn peer ->
       Peer.cast(peer, message)
     end)
@@ -67,9 +70,23 @@ defmodule Bib.Torrent do
     |> :gen_statem.call({:have, index})
   end
 
+  def get_peer_id(info_hash) do
+    :gen_statem.call(name(info_hash), :get_peer_id)
+  end
+
+  def get_pieces(info_hash) do
+    :gen_statem.call(name(info_hash), :get_pieces)
+  end
+
+  def get_download_location(info_hash) do
+    :gen_statem.call(name(info_hash), :get_download_location)
+  end
+
   @impl :gen_statem
   def init(args) do
     Process.set_label("Torrent for #{Path.basename(args[:torrent_file])}")
+
+    state = %State{}
 
     client_prefix = "-BK0001-"
     # id = :rand.bytes(13)
@@ -78,16 +95,17 @@ defmodule Bib.Torrent do
 
     data = %Data{
       info_hash: args.info_hash,
-      torrent_file: args[:torrent_file],
-      download_location: args[:download_location],
-      peer_id: peer_id
+      torrent_file: args.torrent_file,
+      download_location: args.download_location,
+      peer_id: peer_id,
+      port: args.port
     }
 
-    {:ok, :initializing, data, [{:next_event, :internal, :load_metainfo_file}]}
+    {:ok, state, data, [{:next_event, :internal, :load_metainfo_file}]}
   end
 
   @impl :gen_statem
-  def handle_event(:internal, :load_metainfo_file, :initializing, %Data{} = data) do
+  def handle_event(:internal, :load_metainfo_file, %State{} = _state, %Data{} = data) do
     number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
     data = %Data{data | pieces: <<0::size(number_of_pieces)>>}
 
@@ -104,7 +122,7 @@ defmodule Bib.Torrent do
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
   end
 
-  def handle_event(:internal, :verify_local_data, :initializing, %Data{} = data) do
+  def handle_event(:internal, :verify_local_data, %State{} = _state, %Data{} = data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
 
     download_filename = Path.join([data.download_location, MetaInfo.name(data.info_hash)])
@@ -113,11 +131,6 @@ defmodule Bib.Torrent do
       Logger.debug("#{download_filename} exists, verifying")
 
       pieces = FileOps.verify_local_data(data.info_hash, download_filename)
-
-      %{have: have, want: want} = Bitfield.counts(pieces)
-
-      Logger.debug("have: #{have} pieces")
-      Logger.debug("want: #{want} pieces")
 
       data = %Data{data | pieces: pieces}
 
@@ -136,18 +149,22 @@ defmodule Bib.Torrent do
     # TODO update with verified data
   end
 
-  def handle_event(:internal, :announce, :initializing, data) do
-    announce_url = MetaInfo.announce(data.info_hash)
-    peer_id = data.peer_id
-    port = data.port
+  def handle_event(:internal, :announce, %State{} = _state, %Data{} = data) do
+    %{have: have, want: want} = Bitfield.counts(data.pieces)
+    Logger.debug("have: #{have} pieces")
+    Logger.debug("want: #{want} pieces")
+
+    left = MetaInfo.left(data.info_hash, data.pieces)
+    Logger.debug(left: left)
 
     with {_, {:ok, response}} <-
            {:announce_get,
-            Req.get(announce_url,
+            Req.get(MetaInfo.announce(data.info_hash),
               params: [
                 info_hash: data.info_hash,
-                peer_id: peer_id,
-                port: port,
+                peer_id: data.peer_id,
+                port: data.port,
+                left: left,
                 uploaded: 0,
                 downloaded: 0,
                 event: "started"
@@ -156,14 +173,32 @@ defmodule Bib.Torrent do
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
       data = %Data{data | announce_response: decoded_announce_response}
-      {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
+      Logger.debug(port: data.port)
+      Logger.debug("#{inspect(decoded_announce_response)}")
+
+      if left > 0 do
+        {
+          :next_state,
+          %State{},
+          data,
+          [
+            {:next_event, :internal, :connect_to_peers},
+            {{:timeout, :announce_timer},
+             :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok},
+            {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
+          ]
+        }
+      else
+        Logger.debug("we have all pieces at startup, not connecting to other peers")
+        {:next_state, %State{}, data, [{{:timeout, :choke_timer}, :timer.seconds(10), :ok}]}
+      end
     else
       e ->
         raise e
     end
   end
 
-  def handle_event(:internal, :connect_to_peers, :started, %Data{} = data) do
+  def handle_event(:internal, :connect_to_peers, %State{}, %Data{} = data) do
     available_peers =
       data.announce_response
       |> Map.fetch!("peers")
@@ -199,13 +234,27 @@ defmodule Bib.Torrent do
     }
   end
 
+  # TODO:
+  # this is very bad...
+  # do the actual algorithm here
+  # to choke unchoke based on upload/download statistics
+  # and opportunistic unchoke to random peer
   def handle_event({:timeout, :choke_timer}, :ok, %State{} = _state, %Data{} = data) do
-    # Logger.debug("choke timer")
+    Logger.debug("choke timer")
 
-    _peers = Bib.PeerSupervisor.peers(data.info_hash)
+    peers = Bib.PeerSupervisor.peers(data.info_hash)
 
-    # 1. get peers from sup
-    # 1.
+    broadcast_async(data.info_hash, :choke)
+
+    peers_to_unchoke = n_random(peers, data.max_uploads)
+
+    Logger.debug("unchoking #{inspect(peers_to_unchoke)}")
+
+    broadcast_async(peers_to_unchoke, :unchoke)
+
+    # TODO just store the pids of the currently choked pids so we avoid
+    # rapidly choking/unchoking them in the case where there are less
+    # peers than available upload slots
 
     {
       :keep_state_and_data,
@@ -213,6 +262,39 @@ defmodule Bib.Torrent do
         {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
       ]
     }
+  end
+
+  def handle_event({:timeout, :announce_timer}, :ok, %State{} = _state, %Data{} = data) do
+    Logger.debug("announce timer")
+
+    left = MetaInfo.left(data.info_hash, data.pieces)
+
+    with {_, {:ok, response}} <-
+           {:announce_get,
+            Req.get(MetaInfo.announce(data.info_hash),
+              params: [
+                info_hash: data.info_hash,
+                peer_id: data.peer_id,
+                port: data.port,
+                left: left,
+                uploaded: 0,
+                downloaded: 0,
+                event: "started"
+              ]
+            )},
+         {_, {:ok, decoded_announce_response, <<>>}} <-
+           {:bencode_decode, Bencode.decode(response.body)} do
+      data = %Data{data | announce_response: decoded_announce_response}
+
+      {
+        :keep_state,
+        data,
+        [
+          {{:timeout, :announce_timer},
+           :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok}
+        ]
+      }
+    end
   end
 
   def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do
@@ -223,9 +305,42 @@ defmodule Bib.Torrent do
 
     if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
+
+      left = MetaInfo.left(data.info_hash, data.pieces)
+
+      with {_, {:ok, response}} <-
+             {:announce_get,
+              Req.get(MetaInfo.announce(data.info_hash),
+                params: [
+                  info_hash: data.info_hash,
+                  peer_id: data.peer_id,
+                  port: data.port,
+                  left: left,
+                  uploaded: 0,
+                  downloaded: 0,
+                  event: "completed"
+                ]
+              )},
+           {_, {:ok, decoded_announce_response, <<>>}} <-
+             {:bencode_decode, Bencode.decode(response.body)} do
+        data = %Data{data | announce_response: decoded_announce_response}
+        {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
+      end
     end
 
     {:keep_state, data, [{:reply, from, :ok}]}
+  end
+
+  def handle_event({:call, from}, :get_peer_id, _state, %Data{} = data) do
+    {:keep_state_and_data, [{:reply, from, {:ok, data.peer_id}}]}
+  end
+
+  def handle_event({:call, from}, :get_pieces, _state, %Data{} = data) do
+    {:keep_state_and_data, [{:reply, from, {:ok, data.pieces}}]}
+  end
+
+  def handle_event({:call, from}, :get_download_location, _state, %Data{} = data) do
+    {:keep_state_and_data, [{:reply, from, {:ok, data.download_location}}]}
   end
 
   def name(info_hash) do
@@ -244,5 +359,31 @@ defmodule Bib.Torrent do
       type: :worker,
       restart: :permanent
     }
+  end
+
+  defp n_random(collection, n) do
+    n_random(collection, n, [])
+  end
+
+  defp n_random(collection, n, selections)
+
+  defp n_random(collection, _n, selections) when length(selections) == length(collection) do
+    Enum.map(selections, fn i -> Enum.at(collection, i) end)
+  end
+
+  defp n_random(collection, n, selections) when length(selections) < n do
+    random_index = Enum.random(0..(Enum.count(collection) - 1))
+
+    if random_index not in selections do
+      n_random(collection, n, [random_index | selections])
+    else
+      n_random(collection, n, selections)
+    end
+  end
+
+  defp n_random(collection, _n, selections) do
+    Enum.map(selections, fn i ->
+      Enum.at(collection, i)
+    end)
   end
 end

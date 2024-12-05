@@ -10,8 +10,8 @@ defmodule Bib.TorrentsSupervisor do
   end
 
   @impl DynamicSupervisor
-  def init(_init_arg) do
-    DynamicSupervisor.init(strategy: :one_for_one)
+  def init(init_arg) do
+    DynamicSupervisor.init(strategy: :one_for_one, extra_arguments: [init_arg])
   end
 
   def start_child(torrent_args) do

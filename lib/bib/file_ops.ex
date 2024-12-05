@@ -18,8 +18,14 @@ defmodule Bib.FileOps do
     end)
   end
 
+  def read_block(info_hash, path, index, begin, length) do
+    {:ok, fd} = :file.open(path, [:read, :raw])
+    piece_offset = MetaInfo.piece_offset(info_hash, index)
+    :file.pread(fd, piece_offset + begin, length)
+  end
+
   def write_block_and_verify_piece(info_hash, path, index, begin, block) do
-    with {:ok, fd} = :file.open(path, [:write, :read, :raw, :binary]),
+    with {:ok, fd} <- :file.open(path, [:write, :read, :raw, :binary]),
          :ok <- write_block(fd, info_hash, index, begin, block),
          {:ok, matches?} <- piece_matches_expected_hash?(info_hash, fd, index) do
       {:ok, matches?}
