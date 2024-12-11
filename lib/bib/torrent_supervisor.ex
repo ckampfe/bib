@@ -1,6 +1,7 @@
 defmodule Bib.TorrentSupervisor do
   use Supervisor
   require Logger
+  import Bib.Macros
 
   def start_link(extra_args, args) do
     args = Map.merge(extra_args, args)
@@ -19,7 +20,7 @@ defmodule Bib.TorrentSupervisor do
     Supervisor.init(children, strategy: :one_for_all)
   end
 
-  def name(info_hash) do
+  def name(info_hash) when is_info_hash(info_hash) do
     {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 end

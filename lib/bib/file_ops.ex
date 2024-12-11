@@ -1,7 +1,8 @@
 defmodule Bib.FileOps do
   alias Bib.{MetaInfo, Bitfield}
+  import Bib.Macros
 
-  def verify_local_data(info_hash, path) when is_binary(path) do
+  def verify_local_data(info_hash, path) when is_info_hash(info_hash) and is_binary(path) do
     {:ok, fd} = :file.open(path, [:read, :raw])
 
     number_of_pieces = MetaInfo.number_of_pieces(info_hash)
@@ -18,13 +19,14 @@ defmodule Bib.FileOps do
     end)
   end
 
-  def read_block(info_hash, path, index, begin, length) do
+  def read_block(info_hash, path, index, begin, length) when is_info_hash(info_hash) do
     {:ok, fd} = :file.open(path, [:read, :raw])
     piece_offset = MetaInfo.piece_offset(info_hash, index)
     :file.pread(fd, piece_offset + begin, length)
   end
 
-  def write_block_and_verify_piece(info_hash, path, index, begin, block) do
+  def write_block_and_verify_piece(info_hash, path, index, begin, block)
+      when is_info_hash(info_hash) do
     with {:ok, fd} <- :file.open(path, [:write, :read, :raw, :binary]),
          :ok <- write_block(fd, info_hash, index, begin, block),
          {:ok, matches?} <- piece_matches_expected_hash?(info_hash, fd, index) do
@@ -32,7 +34,7 @@ defmodule Bib.FileOps do
     end
   end
 
-  def write_block(fd, info_hash, index, begin, block) do
+  def write_block(fd, info_hash, index, begin, block) when is_info_hash(info_hash) do
     piece_offset = MetaInfo.piece_offset(info_hash, index)
 
     with :ok <- :file.pwrite(fd, piece_offset + begin, block),
@@ -41,7 +43,7 @@ defmodule Bib.FileOps do
     end
   end
 
-  def piece_matches_expected_hash?(info_hash, fd, index) do
+  def piece_matches_expected_hash?(info_hash, fd, index) when is_info_hash(info_hash) do
     piece_offset = index * MetaInfo.piece_length(info_hash)
 
     actual_piece_length = MetaInfo.actual_piece_length(info_hash, index)

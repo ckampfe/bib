@@ -1,5 +1,7 @@
 defmodule Bib.MetaInfo do
   alias Bib.{Bencode, Bitfield}
+  import Bib.Macros
+
   defstruct [:inner]
 
   @doc """
@@ -18,19 +20,19 @@ defmodule Bib.MetaInfo do
     info_hash
   end
 
-  def announce(info_hash) when is_binary(info_hash) do
+  def announce(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"announce" => announce} = self.inner
     announce
   end
 
-  def length(info_hash) when is_binary(info_hash) do
+  def length(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"length" => length}} = self.inner
     length
   end
 
-  def name(info_hash) when is_binary(info_hash) do
+  def name(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"name" => name}} = self.inner
     name
@@ -40,7 +42,7 @@ defmodule Bib.MetaInfo do
   The nominal piece length.
   Does not take into account a truncated final piece.
   """
-  def piece_length(info_hash) when is_binary(info_hash) do
+  def piece_length(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"piece length" => piece_length}} = self.inner
     piece_length
@@ -52,7 +54,7 @@ defmodule Bib.MetaInfo do
   otherewise returns `piece_length/1`
   """
   def actual_piece_length(info_hash, index)
-      when is_binary(info_hash) and is_integer(index) do
+      when is_info_hash(info_hash) and is_integer(index) do
     if last_piece?(info_hash, index) do
       last_piece_length(info_hash)
     else
@@ -63,7 +65,7 @@ defmodule Bib.MetaInfo do
   @doc """
   A list of the 20-byte SHA-1 hashes of the pieces, in order.
   """
-  def pieces(info_hash) when is_binary(info_hash) do
+  def pieces(info_hash) when is_info_hash(info_hash) do
     for <<piece::binary-size(20) <- pieces_raw(info_hash)>> do
       piece
     end
@@ -72,14 +74,14 @@ defmodule Bib.MetaInfo do
   @doc """
   The total number of pieces in the torrent.
   """
-  def number_of_pieces(info_hash) when is_binary(info_hash) do
+  def number_of_pieces(info_hash) when is_info_hash(info_hash) do
     round(__MODULE__.length(info_hash) / piece_length(info_hash))
   end
 
   @doc """
   return the number of bytes remaining to finish the download
   """
-  def left(info_hash, pieces) do
+  def left(info_hash, pieces) when is_info_hash(info_hash) do
     # we need:
     # - the raw metainfo
     # - the piece length
@@ -101,7 +103,7 @@ defmodule Bib.MetaInfo do
   The raw `pieces` string from the MetaInfo.
   Has length `20 * number_of_pieces`
   """
-  def pieces_raw(info_hash) when is_binary(info_hash) do
+  def pieces_raw(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"pieces" => pieces}} = self.inner
     pieces
@@ -121,7 +123,7 @@ defmodule Bib.MetaInfo do
   @doc """
   The computed length of the last piece.
   """
-  def last_piece_length(info_hash) do
+  def last_piece_length(info_hash) when is_info_hash(info_hash) do
     actual_length = __MODULE__.length(info_hash)
 
     if rem(actual_length, piece_length(info_hash)) == 0 do
@@ -134,17 +136,17 @@ defmodule Bib.MetaInfo do
     end
   end
 
-  def last_piece?(info_hash, index) when is_binary(info_hash) and is_integer(index) do
+  def last_piece?(info_hash, index) when is_info_hash(info_hash) and is_integer(index) do
     index == number_of_pieces(info_hash) - 1
   end
 
   def piece_offset(info_hash, index)
-      when is_binary(info_hash) and is_integer(index) do
+      when is_info_hash(info_hash) and is_integer(index) do
     index * piece_length(info_hash)
   end
 
   def blocks_for_piece(info_hash, index, block_length)
-      when is_binary(info_hash) and
+      when is_info_hash(info_hash) and
              is_integer(index) and
              is_integer(block_length) do
     actual_piece_length = actual_piece_length(info_hash, index)

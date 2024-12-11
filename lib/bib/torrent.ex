@@ -1,22 +1,23 @@
 # todo
-# - [ ] uploads/seeding
+# - [x] uploads/seeding
 # - [ ] configurable max download concurrency
 # - [ ] configurable max upload concurrency
 # - [x] verify local data on startup
 # - [ ] API to force verify of local data
-# - [ ] broadcast bitset to peer processes
+# - [x] broadcast bitset to peer processes
 # - [x] broadcast `have` to peer processes when we receive and checksum a piece
-# - [ ] generate peer id on startup
+# - [x] generate peer id on startup
 # - [ ] track global uploaded amount (receive upload reports from peers)
 # - [ ] track global downloaded amount (progress from completed pieces)
 # - [ ] announce start/stopped/etc to tracker
+# - [x] announce left to tracker
 # - [ ] announce uploaded to tracker
 # - [ ] announce downloaded to tracker
-# - [ ] announce timer
-# - [ ] timers to choke/unchoke peers
+# - [x] announce timer
+# - [x] timers to choke/unchoke peers
 # - [ ] timers to try to request pieces from different peers
 # - [ ] track individual peer upload/download
-# - [ ] optimize metainfo so that each peer doesn't need a copy
+# - [x] optimize metainfo so that each peer doesn't need a copy
 #
 # Peer -> TorrentState API
 
@@ -25,6 +26,7 @@ defmodule Bib.Torrent do
 
   require Logger
   alias Bib.{Bencode, MetaInfo, Peer, Bitfield, PeerSupervisor, FileOps}
+  import Bib.Macros
 
   defmodule State do
     defstruct []
@@ -47,13 +49,13 @@ defmodule Bib.Torrent do
   end
 
   def start_link(args) do
-    :gen_statem.start_link(name(args.info_hash), __MODULE__, args, [])
+    :gen_statem.start_link(name(args.info_hash), __MODULE__, args, timeout: :timer.seconds(5))
   end
 
   @doc """
   send a message to all peers, asynchronously, with no reply
   """
-  def broadcast_async(info_hash, message) when is_binary(info_hash) do
+  def broadcast_async(info_hash, message) when is_info_hash(info_hash) do
     peers = PeerSupervisor.peers(info_hash)
     broadcast_async(peers, message)
   end
@@ -64,21 +66,21 @@ defmodule Bib.Torrent do
     end)
   end
 
-  def have(info_hash, index) do
+  def have(info_hash, index) when is_info_hash(info_hash) do
     info_hash
     |> name()
     |> :gen_statem.call({:have, index})
   end
 
-  def get_peer_id(info_hash) do
+  def get_peer_id(info_hash) when is_info_hash(info_hash) do
     :gen_statem.call(name(info_hash), :get_peer_id)
   end
 
-  def get_pieces(info_hash) do
+  def get_pieces(info_hash) when is_info_hash(info_hash) do
     :gen_statem.call(name(info_hash), :get_pieces)
   end
 
-  def get_download_location(info_hash) do
+  def get_download_location(info_hash) when is_info_hash(info_hash) do
     :gen_statem.call(name(info_hash), :get_download_location)
   end
 
@@ -89,9 +91,8 @@ defmodule Bib.Torrent do
     state = %State{}
 
     client_prefix = "-BK0001-"
-    # id = :rand.bytes(13)
-    id = "abcdefghijkl"
-    peer_id = client_prefix <> id
+    random_id = :rand.bytes(20 - byte_size(client_prefix))
+    peer_id = client_prefix <> random_id
 
     data = %Data{
       info_hash: args.info_hash,
@@ -182,10 +183,10 @@ defmodule Bib.Torrent do
           %State{},
           data,
           [
-            {:next_event, :internal, :connect_to_peers},
             {{:timeout, :announce_timer},
              :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok},
-            {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
+            {{:timeout, :choke_timer}, :timer.seconds(10), :ok},
+            {:next_event, :internal, :connect_to_peers}
           ]
         }
       else
@@ -228,9 +229,7 @@ defmodule Bib.Torrent do
       :next_state,
       %State{},
       data,
-      [
-        {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
-      ]
+      []
     }
   end
 
@@ -343,7 +342,7 @@ defmodule Bib.Torrent do
     {:keep_state_and_data, [{:reply, from, {:ok, data.download_location}}]}
   end
 
-  def name(info_hash) do
+  def name(info_hash) when is_info_hash(info_hash) do
     {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 

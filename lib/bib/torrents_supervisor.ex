@@ -4,6 +4,7 @@ defmodule Bib.TorrentsSupervisor do
   """
 
   use DynamicSupervisor
+  import Bib.Macros
 
   def start_link(init_arg) do
     DynamicSupervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -18,7 +19,7 @@ defmodule Bib.TorrentsSupervisor do
     DynamicSupervisor.start_child(__MODULE__, {Bib.TorrentSupervisor, torrent_args})
   end
 
-  def stop_child(info_hash) do
+  def stop_child(info_hash) when is_info_hash(info_hash) do
     [{pid, _}] = Registry.lookup(Bib.Registry, {Bib.TorrentSupervisor, info_hash})
     DynamicSupervisor.terminate_child(__MODULE__, pid)
   end

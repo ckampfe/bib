@@ -31,6 +31,7 @@ defmodule Bib.Peer do
   alias Bib.FileOps
   alias Bib.{Torrent, Bitfield, PeerSupervisor, MetaInfo}
   alias Bib.Peer.Protocol
+  import Bib.Macros
 
   require Logger
 
@@ -113,7 +114,7 @@ defmodule Bib.Peer do
   @doc """
   start a peer process to connect to a remote peer
   """
-  def connect(info_hash, %Args{} = peer_args) when is_binary(info_hash) do
+  def connect(info_hash, %Args{} = peer_args) when is_info_hash(info_hash) do
     PeerSupervisor.start_child(info_hash, peer_args)
   end
 
@@ -121,7 +122,7 @@ defmodule Bib.Peer do
   start a peer process for a connection that was initiated by the remote peer
   """
   def accept_remote_peer_connection(info_hash, %AcceptArgs{} = accept_args)
-      when is_binary(info_hash) do
+      when is_info_hash(info_hash) do
     PeerSupervisor.start_child(info_hash, accept_args)
   end
 
@@ -657,7 +658,7 @@ defmodule Bib.Peer do
   end
 
   defp send_handshake(socket, info_hash, peer_id)
-       when is_binary(info_hash) and is_binary(peer_id) do
+       when is_info_hash(info_hash) and is_binary(peer_id) do
     :gen_tcp.send(socket, [
       19,
       <<"BitTorrent protocol">>,
