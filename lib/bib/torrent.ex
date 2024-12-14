@@ -91,7 +91,8 @@ defmodule Bib.Torrent do
     state = %State{}
 
     client_prefix = "-BK0001-"
-    random_id = :rand.bytes(20 - byte_size(client_prefix))
+    # random_id = :rand.bytes(20 - byte_size(client_prefix))
+    random_id = "ABCDEFGHIJKL"
     peer_id = client_prefix <> random_id
 
     data = %Data{

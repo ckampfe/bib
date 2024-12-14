@@ -63,9 +63,9 @@ defmodule Bib.Peer do
       :remote_peer_id,
       :my_pieces,
       :peer_pieces,
-      :interest_interval,
-      :keepalive_interval,
-      :block_length
+      interest_interval: :timer.minutes(1),
+      keepalive_interval: :timer.seconds(30),
+      block_length: 2 ** 14
     ]
   end
 
@@ -161,8 +161,6 @@ defmodule Bib.Peer do
       remote_peer_id: args.remote_peer_id,
       peer_id: args.peer_id,
       my_pieces: args.pieces,
-      interest_interval: :timer.minutes(1),
-      keepalive_interval: :timer.seconds(30),
       block_length: args.block_length
     }
 
@@ -529,7 +527,7 @@ defmodule Bib.Peer do
         %State{} = _state,
         %Data{} = data
       ) do
-    Logger.debug("received cancel: #{index}, #{begin}, #{length}")
+    Logger.debug("received cancel: #{index}, #{begin}, #{length}, not yet implemented")
     :ok = set_socket_opts(data.socket)
     {:keep_state, data}
   end
