@@ -11,19 +11,6 @@ defmodule Bib do
   Documentation for `Bib`.
   """
 
-  @doc """
-  Hello world.
-
-  ## Examples
-
-      iex> Bib.hello()
-      :world
-
-  """
-  def hello do
-    :world
-  end
-
   def start_torrent(torrent_file, download_location) do
     with {:ok, metainfo_binary} <- File.read(torrent_file),
          {:ok, decoded, <<>>} <- Bencode.decode(metainfo_binary),
