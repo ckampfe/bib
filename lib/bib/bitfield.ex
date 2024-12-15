@@ -50,9 +50,6 @@ defmodule Bib.Bitfield do
   end
 
   def random_wanted_piece(peer_bitstring, my_bitstring) do
-    IO.inspect(peer_bitstring, label: "peer")
-    IO.inspect(my_bitstring, label: "me")
-
     diff_bitstrings(peer_bitstring, my_bitstring)
     |> set_indexes()
     |> then(fn

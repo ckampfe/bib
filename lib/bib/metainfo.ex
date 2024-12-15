@@ -20,23 +20,42 @@ defmodule Bib.MetaInfo do
     info_hash
   end
 
+  @doc """
+  the tracker announce url
+  """
   def announce(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"announce" => announce} = self.inner
     announce
   end
 
+  @doc """
+  the length of the torrent, in bytes
+  """
   def length(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"length" => length}} = self.inner
     length
   end
 
+  @doc """
+  the filename
+  """
   def name(info_hash) when is_info_hash(info_hash) do
     self = :persistent_term.get({__MODULE__, info_hash})
     %{"info" => %{"name" => name}} = self.inner
     name
   end
+
+  # # TODO
+  # # multiple files
+  # # have schema:
+  # # %{length: integer, path: [string]}
+  # def files(info_hash) when is_info_hash(info_hash) do
+  #   self = :persistent_term.get({__MODULE__, info_hash})
+  #   %{"info" => %{"files" => files}} = self.inner
+  #   files
+  # end
 
   @doc """
   The nominal piece length.
@@ -82,11 +101,6 @@ defmodule Bib.MetaInfo do
   return the number of bytes remaining to finish the download
   """
   def left(info_hash, pieces) when is_info_hash(info_hash) do
-    # we need:
-    # - the raw metainfo
-    # - the piece length
-    # - the last piece length
-    # - the indexes of the remaining pieces
     unset_indexes = Bitfield.unset_indexes(pieces)
 
     for index <- unset_indexes, reduce: 0 do
@@ -108,17 +122,6 @@ defmodule Bib.MetaInfo do
     %{"info" => %{"pieces" => pieces}} = self.inner
     pieces
   end
-
-  # @doc """
-  # The info hash identifying the torrent.
-  # """
-
-  # def info_hash(torrent_file) when is_binary(torrent_file) do
-  #   self = :persistent_term.get({__MODULE__, torrent_file})
-  #   %{"info" => info} = self.inner
-  #   encoded_info = Bencode.encode(info)
-  #   :crypto.hash(:sha, encoded_info)
-  # end
 
   @doc """
   The computed length of the last piece.

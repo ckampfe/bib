@@ -18,6 +18,7 @@
 # - [ ] timers to try to request pieces from different peers
 # - [ ] track individual peer upload/download
 # - [x] optimize metainfo so that each peer doesn't need a copy
+# - [ ] store a persistent list of torrents to load on boot
 #
 # Peer -> TorrentState API
 
@@ -41,6 +42,8 @@ defmodule Bib.Torrent do
       :announce_response,
       :pieces,
       :port,
+      uploaded: 0,
+      downloaded: 0,
       max_uploads: 4,
       max_downloads: 4,
       active_downloads: 0,
@@ -136,22 +139,22 @@ defmodule Bib.Torrent do
 
       data = %Data{data | pieces: pieces}
 
-      {:keep_state, data, [{:next_event, :internal, :announce}]}
+      {:keep_state, data, [{:next_event, :internal, :announce_started}]}
     else
       Logger.debug(
         "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.info_hash)}"
       )
 
-      FileOps.create_blank_file(download_filename, MetaInfo.length(data.info_hash))
+      _ = FileOps.create_blank_file(download_filename, MetaInfo.length(data.info_hash))
 
-      {:keep_state, data, [{:next_event, :internal, :announce}]}
+      {:keep_state, data, [{:next_event, :internal, :announce_started}]}
     end
 
     # data = %Data{data | pieces: <<>>}
     # TODO update with verified data
   end
 
-  def handle_event(:internal, :announce, %State{} = _state, %Data{} = data) do
+  def handle_event(:internal, :announce_started, %State{} = _state, %Data{} = data) do
     %{have: have, want: want} = Bitfield.counts(data.pieces)
     Logger.debug("have: #{have} pieces")
     Logger.debug("want: #{want} pieces")
@@ -160,23 +163,16 @@ defmodule Bib.Torrent do
     Logger.debug(left: left)
 
     with {_, {:ok, response}} <-
-           {:announce_get,
-            Req.get(MetaInfo.announce(data.info_hash),
-              params: [
-                info_hash: data.info_hash,
-                peer_id: data.peer_id,
-                port: data.port,
-                left: left,
-                uploaded: 0,
-                downloaded: 0,
-                event: "started"
-              ]
-            )},
+           {:announce_get, announce(data, :started)},
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
       data = %Data{data | announce_response: decoded_announce_response}
       Logger.debug(port: data.port)
       Logger.debug("#{inspect(decoded_announce_response)}")
+
+      Logger.debug(
+        "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
+      )
 
       if left > 0 do
         {
@@ -265,26 +261,17 @@ defmodule Bib.Torrent do
   end
 
   def handle_event({:timeout, :announce_timer}, :ok, %State{} = _state, %Data{} = data) do
-    Logger.debug("announce timer")
-
-    left = MetaInfo.left(data.info_hash, data.pieces)
+    Logger.debug("regular announce timer")
 
     with {_, {:ok, response}} <-
-           {:announce_get,
-            Req.get(MetaInfo.announce(data.info_hash),
-              params: [
-                info_hash: data.info_hash,
-                peer_id: data.peer_id,
-                port: data.port,
-                left: left,
-                uploaded: 0,
-                downloaded: 0,
-                event: "started"
-              ]
-            )},
+           {:announce_get, announce(data)},
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
       data = %Data{data | announce_response: decoded_announce_response}
+
+      Logger.debug(
+        "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
+      )
 
       {
         :keep_state,
@@ -306,29 +293,21 @@ defmodule Bib.Torrent do
     if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
 
-      left = MetaInfo.left(data.info_hash, data.pieces)
-
       with {_, {:ok, response}} <-
-             {:announce_get,
-              Req.get(MetaInfo.announce(data.info_hash),
-                params: [
-                  info_hash: data.info_hash,
-                  peer_id: data.peer_id,
-                  port: data.port,
-                  left: left,
-                  uploaded: 0,
-                  downloaded: 0,
-                  event: "completed"
-                ]
-              )},
+             {:announce_get, announce(data, :completed)},
            {_, {:ok, decoded_announce_response, <<>>}} <-
              {:bencode_decode, Bencode.decode(response.body)} do
         data = %Data{data | announce_response: decoded_announce_response}
-        {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
+        # {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
+        {:keep_state, data, [{:reply, from, :ok}]}
+      else
+        error ->
+          Logger.warning("error attempting to announce completion: #{inspect(error)}")
+          {:keep_state, data, [{:reply, from, :ok}]}
       end
+    else
+      {:keep_state, data, [{:reply, from, :ok}]}
     end
-
-    {:keep_state, data, [{:reply, from, :ok}]}
   end
 
   def handle_event({:call, from}, :get_peer_id, _state, %Data{} = data) do
@@ -345,6 +324,29 @@ defmodule Bib.Torrent do
 
   def name(info_hash) when is_info_hash(info_hash) do
     {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
+  end
+
+  @doc """
+  https://wiki.theory.org/BitTorrentSpecification#Tracker_Request_Parameters
+  """
+
+  def announce(%Data{} = data, event \\ nil)
+      when event in [:started, :completed, :stopped, nil] do
+    left = MetaInfo.left(data.info_hash, data.pieces)
+    tracker_url = MetaInfo.announce(data.info_hash)
+    event = Atom.to_string(event)
+
+    Req.get(tracker_url,
+      params: [
+        info_hash: data.info_hash,
+        peer_id: data.peer_id,
+        port: data.port,
+        left: left,
+        uploaded: data.uploaded,
+        downloaded: data.downloaded,
+        event: event
+      ]
+    )
   end
 
   @impl :gen_statem

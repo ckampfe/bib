@@ -204,7 +204,7 @@ defmodule Bib.Peer do
 
   def handle_event(:internal, :send_bitfield, %State{} = _state, %Data{} = data) do
     bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
-    :gen_tcp.send(data.socket, bitfield_encoded)
+    :ok = :gen_tcp.send(data.socket, bitfield_encoded)
     Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
     :keep_state_and_data
   end
@@ -260,7 +260,7 @@ defmodule Bib.Peer do
 
       bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
       Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
-      :gen_tcp.send(data.socket, bitfield_encoded)
+      :ok = :gen_tcp.send(data.socket, bitfield_encoded)
 
       {
         :keep_state_and_data,
@@ -456,18 +456,6 @@ defmodule Bib.Peer do
       ) do
     Logger.debug("received request, sending block for: #{index}, #{begin}, #{length}")
 
-    IO.inspect(data.download_location)
-    IO.inspect(MetaInfo.name(data.info_hash))
-
-    # {:ok, bytes_sent} =
-    # FileOps.send_block(
-    #   Path.join([data.download_location, MetaInfo.name(data.info_hash)]),
-    #   data.info_hash,
-    #   data.socket,
-    #   index,
-    #   begin,
-    #   length
-    # )
     {:ok, block} =
       FileOps.read_block(
         data.info_hash,
@@ -478,11 +466,13 @@ defmodule Bib.Peer do
       )
 
     piece_message = Protocol.encode({:piece, index, begin, block})
+
     :ok = :gen_tcp.send(data.socket, piece_message)
 
     Logger.debug("sent #{:erlang.iolist_size(block)} to peer for #{index}, #{begin}, #{length}")
 
     :ok = set_socket_opts(data.socket)
+
     {:keep_state, data}
   end
 
@@ -547,7 +537,7 @@ defmodule Bib.Peer do
 
       Logger.debug("sent interested")
 
-      :gen_tcp.send(data.socket, encoded)
+      :ok = :gen_tcp.send(data.socket, encoded)
 
       if state.i_am_interested_in_peer do
         {
@@ -572,7 +562,7 @@ defmodule Bib.Peer do
 
       Logger.debug("sent not interested #{inspect(encoded)}")
 
-      :gen_tcp.send(data.socket, encoded)
+      :ok = :gen_tcp.send(data.socket, encoded)
 
       if state.i_am_interested_in_peer do
         {
@@ -591,7 +581,7 @@ defmodule Bib.Peer do
   end
 
   def handle_event({:timeout, :keepalive_timer}, :ok, %State{} = _state, %Data{} = data) do
-    :gen_tcp.send(data.socket, Bib.Peer.Protocol.encode(:keepalive))
+    :ok = :gen_tcp.send(data.socket, Bib.Peer.Protocol.encode(:keepalive))
 
     Logger.debug("sent keepalive")
 
@@ -603,7 +593,8 @@ defmodule Bib.Peer do
 
   def handle_event(:cast, :choke, %State{} = state, %Data{} = data) do
     choke = Protocol.encode(:choke)
-    :gen_tcp.send(data.socket, choke)
+
+    :ok = :gen_tcp.send(data.socket, choke)
 
     {
       :next_state,
@@ -614,7 +605,8 @@ defmodule Bib.Peer do
 
   def handle_event(:cast, :unchoke, %State{} = state, %Data{} = data) do
     unchoke = Protocol.encode(:unchoke)
-    :gen_tcp.send(data.socket, unchoke)
+
+    :ok = :gen_tcp.send(data.socket, unchoke)
 
     {
       :next_state,

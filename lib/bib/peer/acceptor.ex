@@ -32,7 +32,6 @@ defmodule Bib.Peer.Acceptor do
   def handle_info(:accept, %State{} = state) do
     with {_, {:ok, socket}} <-
            {:accept, :gen_tcp.accept(state.listen_socket, :timer.seconds(5))},
-         _ = Logger.debug("accepted!"),
          {_, :ok} <-
            {:handshake_setopts,
             :inet.setopts(
@@ -46,6 +45,7 @@ defmodule Bib.Peer.Acceptor do
               ]
             )},
          {_, {:ok, remote_peer_address}} <- {:peername, :inet.peername(socket)},
+         _ = Logger.debug("accepted connection from #{inspect(remote_peer_address)}"),
          {_, {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}} <-
            {:receive_handshake, Peer.receive_handshake(socket)},
          {_, {:ok, peer_id}} <- {:get_peer_id, Torrent.get_peer_id(challenge_info_hash)},
@@ -81,33 +81,41 @@ defmodule Bib.Peer.Acceptor do
         Logger.debug("listen socket closed (in acceptor)")
         {:stop, :normal}
 
+      # the timeout is intentionally set,
+      # we don't need to be crashing/flapping if a receive times out,
+      # just try to receive again
       {:accept, {:error, :timeout}} ->
         Process.send(self(), :accept, [])
         {:noreply, state}
 
       {:accept, {:error, :system_limit}} ->
-        raise "reached system limit trying to accept a new socket"
+        {:stop, "reached system limit trying to accept a new socket", state}
+
+      {:accept, {:error, posix}} ->
+        {:stop, "posix error when accepting connection: #{inspect(posix)}", state}
 
       {:handshake_setopts, {:error, error}} ->
-        raise "error in handshake setopts: #{inspect(error)}"
+        {:stop, "error in handshake setopts: #{inspect(error)}", state}
 
       {:receive_handshake, {:error, error}} ->
-        raise "error receiving handshake #{inspect(error)}"
+        {:stop, "error receiving handshake #{inspect(error)}", state}
 
       {:peername, {:error, error}} ->
-        raise "error in getting peername: #{inspect(error)}"
+        {:stop, "error in getting peername: #{inspect(error)}", state}
 
       {:get_peer_id, error} ->
-        raise "error getting peer_id from Torrent process #{inspect(error)}"
+        {:stop, "error getting peer_id from Torrent process #{inspect(error)}", state}
 
       {:peer_accept, {:error, error}} ->
-        raise "error starting peer process for connection #{inspect(error)}"
+        {:stop, "error starting peer process for connection #{inspect(error)}", state}
 
       {:controlling_process, {:error, error}} ->
-        raise "error setting controlling process: #{inspect(error)}"
+        {:stop, "error setting controlling process: #{inspect(error)}", state}
 
       unknown_error ->
-        raise "unknown error occurred when accepting connection from new peer: #{inspect(unknown_error)}"
+        {:stop,
+         "unknown error occurred when accepting connection from new peer: #{inspect(unknown_error)}",
+         state}
     end
   end
 end
