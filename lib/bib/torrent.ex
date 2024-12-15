@@ -9,7 +9,7 @@
 # - [x] generate peer id on startup
 # - [ ] track global uploaded amount (receive upload reports from peers)
 # - [ ] track global downloaded amount (progress from completed pieces)
-# - [ ] announce start/stopped/etc to tracker
+# - [x] announce start/stopped/etc to tracker
 # - [x] announce left to tracker
 # - [ ] announce uploaded to tracker
 # - [ ] announce downloaded to tracker
@@ -19,6 +19,7 @@
 # - [ ] track individual peer upload/download
 # - [x] optimize metainfo so that each peer doesn't need a copy
 # - [ ] store a persistent list of torrents to load on boot
+# - [x] ability to get time until next announce
 #
 # Peer -> TorrentState API
 
@@ -30,7 +31,7 @@ defmodule Bib.Torrent do
   import Bib.Macros
 
   defmodule State do
-    defstruct []
+    defstruct state: :initializing
   end
 
   defmodule Data do
@@ -42,6 +43,7 @@ defmodule Bib.Torrent do
       :announce_response,
       :pieces,
       :port,
+      :last_announce_at,
       uploaded: 0,
       downloaded: 0,
       max_uploads: 4,
@@ -51,6 +53,10 @@ defmodule Bib.Torrent do
     ]
   end
 
+  #############################################################################
+  # START PUBLIC API
+  #############################################################################
+
   def start_link(args) do
     :gen_statem.start_link(name(args.info_hash), __MODULE__, args, timeout: :timer.seconds(5))
   end
@@ -58,12 +64,12 @@ defmodule Bib.Torrent do
   @doc """
   send a message to all peers, asynchronously, with no reply
   """
-  def broadcast_async(info_hash, message) when is_info_hash(info_hash) do
+  def send_to_all_peers_async(info_hash, message) when is_info_hash(info_hash) do
     peers = PeerSupervisor.peers(info_hash)
-    broadcast_async(peers, message)
+    send_to_peers_async(peers, message)
   end
 
-  def broadcast_async(peers, message) when is_list(peers) do
+  def send_to_peers_async(peers, message) when is_list(peers) do
     Enum.each(peers, fn peer ->
       Peer.cast(peer, message)
     end)
@@ -87,6 +93,26 @@ defmodule Bib.Torrent do
     :gen_statem.call(name(info_hash), :get_download_location)
   end
 
+  def pause(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :pause)
+  end
+
+  def resume(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :resume)
+  end
+
+  def accepting_connections?(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :accepting_connections?)
+  end
+
+  def time_until_announce(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :time_until_announce)
+  end
+
+  #############################################################################
+  # END PUBLIC API
+  #############################################################################
+
   @impl :gen_statem
   def init(args) do
     Process.set_label("Torrent for #{Path.basename(args[:torrent_file])}")
@@ -108,6 +134,11 @@ defmodule Bib.Torrent do
 
     {:ok, state, data, [{:next_event, :internal, :load_metainfo_file}]}
   end
+
+  # def handle_event(:enter, _oldstate, %State{state: :initializing}, data) do
+  #   Logger.debug("initializing")
+  #   {:keep_state_and_data, [{:next_event, :internal, :load_metainfo_file}]}
+  # end
 
   @impl :gen_statem
   def handle_event(:internal, :load_metainfo_file, %State{} = _state, %Data{} = data) do
@@ -166,7 +197,12 @@ defmodule Bib.Torrent do
            {:announce_get, announce(data, :started)},
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
-      data = %Data{data | announce_response: decoded_announce_response}
+      data = %Data{
+        data
+        | announce_response: decoded_announce_response,
+          last_announce_at: Time.utc_now()
+      }
+
       Logger.debug(port: data.port)
       Logger.debug("#{inspect(decoded_announce_response)}")
 
@@ -174,22 +210,22 @@ defmodule Bib.Torrent do
         "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
       )
 
-      if left > 0 do
-        {
-          :next_state,
-          %State{},
-          data,
-          [
-            {{:timeout, :announce_timer},
-             :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok},
-            {{:timeout, :choke_timer}, :timer.seconds(10), :ok},
-            {:next_event, :internal, :connect_to_peers}
-          ]
-        }
-      else
-        Logger.debug("we have all pieces at startup, not connecting to other peers")
-        {:next_state, %State{}, data, [{{:timeout, :choke_timer}, :timer.seconds(10), :ok}]}
-      end
+      timers =
+        [
+          {{:timeout, :announce_timer},
+           :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok},
+          {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
+        ]
+
+      actions =
+        if left > 0 do
+          timers ++ [{:next_event, :internal, :connect_to_peers}]
+        else
+          Logger.debug("we have all pieces at startup, not connecting to other peers")
+          timers
+        end
+
+      {:next_state, %State{state: :started}, data, actions}
     else
       e ->
         raise e
@@ -240,13 +276,12 @@ defmodule Bib.Torrent do
 
     peers = Bib.PeerSupervisor.peers(data.info_hash)
 
-    broadcast_async(data.info_hash, :choke)
-
-    peers_to_unchoke = n_random(peers, data.max_uploads)
-
-    Logger.debug("unchoking #{inspect(peers_to_unchoke)}")
-
-    broadcast_async(peers_to_unchoke, :unchoke)
+    if !Enum.empty?(peers) do
+      send_to_all_peers_async(data.info_hash, :choke)
+      peers_to_unchoke = n_random(peers, data.max_uploads)
+      Logger.debug("unchoking #{inspect(peers_to_unchoke)}")
+      send_to_peers_async(peers_to_unchoke, :unchoke)
+    end
 
     # TODO just store the pids of the currently choked pids so we avoid
     # rapidly choking/unchoking them in the case where there are less
@@ -267,7 +302,11 @@ defmodule Bib.Torrent do
            {:announce_get, announce(data)},
          {_, {:ok, decoded_announce_response, <<>>}} <-
            {:bencode_decode, Bencode.decode(response.body)} do
-      data = %Data{data | announce_response: decoded_announce_response}
+      data = %Data{
+        data
+        | announce_response: decoded_announce_response,
+          last_announce_at: Time.utc_now()
+      }
 
       Logger.debug(
         "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
@@ -286,7 +325,7 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do
     data = %Data{data | pieces: Bitfield.set_bit(data.pieces, index)}
-    broadcast_async(data.info_hash, {:have, index})
+    send_to_all_peers_async(data.info_hash, {:have, index})
 
     %{have: have, want: want} = Bitfield.counts(data.pieces)
 
@@ -297,7 +336,12 @@ defmodule Bib.Torrent do
              {:announce_get, announce(data, :completed)},
            {_, {:ok, decoded_announce_response, <<>>}} <-
              {:bencode_decode, Bencode.decode(response.body)} do
-        data = %Data{data | announce_response: decoded_announce_response}
+        data = %Data{
+          data
+          | announce_response: decoded_announce_response,
+            last_announce_at: Time.utc_now()
+        }
+
         # {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
         {:keep_state, data, [{:reply, from, :ok}]}
       else
@@ -320,6 +364,65 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, :get_download_location, _state, %Data{} = data) do
     {:keep_state_and_data, [{:reply, from, {:ok, data.download_location}}]}
+  end
+
+  def handle_event({:call, from}, :pause, %State{} = state, %Data{} = data) do
+    data =
+      with {_, {:ok, response}} <-
+             {:announce_get, announce(data, :stopped)},
+           {_, {:ok, decoded_announce_response, <<>>}} <-
+             {:bencode_decode, Bencode.decode(response.body)} do
+        %Data{
+          data
+          | announce_response: decoded_announce_response,
+            last_announce_at: Time.utc_now()
+        }
+      else
+        e ->
+          Logger.warning("error attempting to announce on pause: #{inspect(e)}")
+          %Data{data | last_announce_at: Time.utc_now()}
+      end
+
+    # TODO
+    # - shutdown currently connected peers
+    # - some way to not accept new peer connections...need to set state to :paused
+
+    state = %State{state | state: :paused}
+
+    {
+      :next_state,
+      state,
+      data,
+      [
+        {:reply, from, :ok},
+        {{:timeout, :announce_timer}, :infinity, :ok},
+        {{:timeout, :choke_timer}, :infinity, :ok}
+      ]
+    }
+  end
+
+  def handle_event({:call, from}, :resume, _state, %Data{} = _data) do
+    {:keep_state_and_data, [{:reply, from, :ok}, {:next_event, :internal, :announce_started}]}
+  end
+
+  def handle_event({:call, from}, :accepting_connections?, %State{state: state}, %Data{} = _data) do
+    reply = state in [:started, :finished]
+    {:keep_state_and_data, [{:reply, from, reply}]}
+  end
+
+  def handle_event({:call, from}, :time_until_announce, %State{} = _state, %Data{} = data) do
+    reply =
+      if data.last_announce_at do
+        {:ok,
+         Time.diff(
+           Time.add(data.last_announce_at, Map.fetch!(data.announce_response, "interval")),
+           Time.utc_now()
+         )}
+      else
+        {:error, :unknown}
+      end
+
+    {:keep_state_and_data, [{:reply, from, reply}]}
   end
 
   def name(info_hash) when is_info_hash(info_hash) do
@@ -351,6 +454,8 @@ defmodule Bib.Torrent do
 
   @impl :gen_statem
   def callback_mode() do
+    # TODO investigate doing actual state transitions rather than ad-hoc
+    # [:handle_event_function, :state_enter]
     :handle_event_function
   end
 

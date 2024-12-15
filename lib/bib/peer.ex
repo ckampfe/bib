@@ -289,13 +289,10 @@ defmodule Bib.Peer do
 
   # keepalive
   def handle_event(:info, {:tcp, _socket, <<>>}, %State{} = _state, %Data{} = data) do
-    # :ok = :inet.setopts(data.socket, [:binary, {:packet, 4}, {:active, :once}])
     :ok = set_socket_opts(data.socket)
     :keep_state_and_data
   end
 
-  # choke = "I am uploading, or not"
-  # interested = "you have something I want, or not"
   def handle_event(:info, {:tcp, _socket, packet}, %State{} = _state, %Data{} = _data) do
     peer_message = Bib.Peer.Protocol.decode(packet)
     {:keep_state_and_data, [{:next_event, :internal, {:peer_message, peer_message}}]}
@@ -306,7 +303,6 @@ defmodule Bib.Peer do
     {:stop, :normal}
   end
 
-  # TODO
   def handle_event(:internal, {:peer_message, :choke}, %State{} = state, %Data{} = data) do
     Logger.debug("received choke")
     state = %State{state | peer_is_choking_me: true}
@@ -349,7 +345,7 @@ defmodule Bib.Peer do
   def handle_event(
         :internal,
         :request_blocks,
-        %State{peer_is_choking_me: false} = _state,
+        %State{i_am_interested_in_peer: true, peer_is_choking_me: false} = _state,
         %Data{} = data
       ) do
     case Bitfield.random_wanted_piece(data.peer_pieces, data.my_pieces) do

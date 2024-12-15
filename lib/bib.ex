@@ -1,5 +1,6 @@
 defmodule Bib do
   import Bib.Macros
+  alias Bib.Torrent
 
   # big stuff to do:
   # - [ ] seeding
@@ -10,6 +11,8 @@ defmodule Bib do
   # - [ ] force update tracker
   # - [ ] verify local data
   # - [x] remove torrent
+  # - [x] pause torrent
+  # - [x] resume torrent
 
   alias Bib.{Bencode, MetaInfo}
 
@@ -17,7 +20,7 @@ defmodule Bib do
   Documentation for `Bib`.
   """
 
-  def start_torrent(torrent_file, download_location) do
+  def add_torrent(torrent_file, download_location) do
     with {:ok, metainfo_binary} <- File.read(torrent_file),
          {:ok, decoded, <<>>} <- Bencode.decode(metainfo_binary),
          info_hash = MetaInfo.new(decoded),
@@ -31,12 +34,16 @@ defmodule Bib do
     end
   end
 
-  def stop_torrent(info_hash) when is_info_hash(info_hash) do
-    Bib.TorrentsSupervisor.stop_child(info_hash)
+  def pause_torrent(info_hash) when is_info_hash(info_hash) do
+    Torrent.pause(info_hash)
+  end
+
+  def resume_torrent(info_hash) when is_info_hash(info_hash) do
+    Torrent.resume(info_hash)
   end
 
   def remove_torrent(info_hash) when is_info_hash(info_hash) do
-    stop_torrent(info_hash)
+    pause_torrent(info_hash)
     :persistent_term.erase(Bib.MetaInfo.key(info_hash))
     :ok
   end
@@ -50,6 +57,6 @@ defmodule Bib do
   end
 
   def s() do
-    start_torrent("/Users/clark/code/bib/a8dmfmt66t211.png.torrent", "/Users/clark/code/bib")
+    add_torrent("/Users/clark/code/bib/a8dmfmt66t211.png.torrent", "/Users/clark/code/bib")
   end
 end

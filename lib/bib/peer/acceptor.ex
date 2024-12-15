@@ -48,6 +48,8 @@ defmodule Bib.Peer.Acceptor do
          _ = Logger.debug("accepted connection from #{inspect(remote_peer_address)}"),
          {_, {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}} <-
            {:receive_handshake, Peer.receive_handshake(socket)},
+         {_, true} <-
+           {:torrent_accepting_connections?, Torrent.accepting_connections?(challenge_info_hash)},
          {_, {:ok, peer_id}} <- {:get_peer_id, Torrent.get_peer_id(challenge_info_hash)},
          {_, {:ok, download_location}} <-
            {:get_download_location, Torrent.get_download_location(challenge_info_hash)},
@@ -77,16 +79,21 @@ defmodule Bib.Peer.Acceptor do
 
       {:noreply, state}
     else
-      {:accept, {:error, :closed}} ->
-        Logger.debug("listen socket closed (in acceptor)")
-        {:stop, :normal}
-
       # the timeout is intentionally set,
       # we don't need to be crashing/flapping if a receive times out,
       # just try to receive again
       {:accept, {:error, :timeout}} ->
         Process.send(self(), :accept, [])
         {:noreply, state}
+
+      {:torrent_accepting_connections?, _} ->
+        Logger.debug("torrent is not accepting connections")
+        Process.send(self(), :accept, [])
+        {:noreply, state}
+
+      {:accept, {:error, :closed}} ->
+        Logger.debug("listen socket closed (in acceptor)")
+        {:stop, :normal}
 
       {:accept, {:error, :system_limit}} ->
         {:stop, "reached system limit trying to accept a new socket", state}
