@@ -16,7 +16,7 @@ defmodule Bib.MetaInfo do
     %{"info" => info} = metainfo.inner
     encoded_info = Bencode.encode(info)
     info_hash = :crypto.hash(:sha, encoded_info)
-    :ok = :persistent_term.put({__MODULE__, info_hash}, metainfo)
+    :ok = :persistent_term.put(key(info_hash), metainfo)
     info_hash
   end
 
@@ -24,7 +24,7 @@ defmodule Bib.MetaInfo do
   the tracker announce url
   """
   def announce(info_hash) when is_info_hash(info_hash) do
-    self = :persistent_term.get({__MODULE__, info_hash})
+    self = :persistent_term.get(key(info_hash))
     %{"announce" => announce} = self.inner
     announce
   end
@@ -33,7 +33,7 @@ defmodule Bib.MetaInfo do
   the length of the torrent, in bytes
   """
   def length(info_hash) when is_info_hash(info_hash) do
-    self = :persistent_term.get({__MODULE__, info_hash})
+    self = :persistent_term.get(key(info_hash))
     %{"info" => %{"length" => length}} = self.inner
     length
   end
@@ -42,7 +42,7 @@ defmodule Bib.MetaInfo do
   the filename
   """
   def name(info_hash) when is_info_hash(info_hash) do
-    self = :persistent_term.get({__MODULE__, info_hash})
+    self = :persistent_term.get(key(info_hash))
     %{"info" => %{"name" => name}} = self.inner
     name
   end
@@ -62,7 +62,7 @@ defmodule Bib.MetaInfo do
   Does not take into account a truncated final piece.
   """
   def piece_length(info_hash) when is_info_hash(info_hash) do
-    self = :persistent_term.get({__MODULE__, info_hash})
+    self = :persistent_term.get(key(info_hash))
     %{"info" => %{"piece length" => piece_length}} = self.inner
     piece_length
   end
@@ -118,7 +118,7 @@ defmodule Bib.MetaInfo do
   Has length `20 * number_of_pieces`
   """
   def pieces_raw(info_hash) when is_info_hash(info_hash) do
-    self = :persistent_term.get({__MODULE__, info_hash})
+    self = :persistent_term.get(key(info_hash))
     %{"info" => %{"pieces" => pieces}} = self.inner
     pieces
   end
@@ -172,5 +172,12 @@ defmodule Bib.MetaInfo do
     else
       blocks
     end
+  end
+
+  @doc """
+  The key used to look up metainfo in the :persistent_term database
+  """
+  def key(info_hash) when is_info_hash(info_hash) do
+    {__MODULE__, info_hash}
   end
 end

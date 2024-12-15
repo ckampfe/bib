@@ -1,9 +1,15 @@
 defmodule Bib do
+  import Bib.Macros
+
   # big stuff to do:
   # - [ ] seeding
   # - [ ] actual peer choke/unchoke/upload algorithm
   # - [ ] tracking of upload/download stats per peer
   # - [ ] configurability (connection limits, etc.)
+  # - [ ] mutliple files in a single torrent
+  # - [ ] force update tracker
+  # - [ ] verify local data
+  # - [x] remove torrent
 
   alias Bib.{Bencode, MetaInfo}
 
@@ -25,8 +31,22 @@ defmodule Bib do
     end
   end
 
-  def stop_torrent(info_hash) do
+  def stop_torrent(info_hash) when is_info_hash(info_hash) do
     Bib.TorrentsSupervisor.stop_child(info_hash)
+  end
+
+  def remove_torrent(info_hash) when is_info_hash(info_hash) do
+    stop_torrent(info_hash)
+    :persistent_term.erase(Bib.MetaInfo.key(info_hash))
+    :ok
+  end
+
+  def update_tracker(info_hash) when is_info_hash(info_hash) do
+    raise "todo"
+  end
+
+  def verify_local_data(info_hash) when is_info_hash(info_hash) do
+    raise "todo"
   end
 
   def s() do
