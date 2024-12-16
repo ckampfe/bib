@@ -109,6 +109,10 @@ defmodule Bib.Torrent do
     :gen_statem.call(name(info_hash), :time_until_announce)
   end
 
+  def verify_local_data(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :verify_local_data)
+  end
+
   #############################################################################
   # END PUBLIC API
   #############################################################################
@@ -423,6 +427,23 @@ defmodule Bib.Torrent do
       end
 
     {:keep_state_and_data, [{:reply, from, reply}]}
+  end
+
+  def handle_event({:call, from}, :verify_local_data, %State{} = _state, %Data{} = data) do
+    download_filename = Path.join([data.download_location, MetaInfo.name(data.info_hash)])
+
+    data =
+      if File.exists?(download_filename) do
+        Logger.debug("#{download_filename} exists, verifying")
+        pieces = FileOps.verify_local_data(data.info_hash, download_filename)
+        %Data{data | pieces: pieces}
+      else
+        Logger.debug("#{download_filename} does not exist")
+        number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
+        %Data{data | pieces: <<0::size(number_of_pieces)>>}
+      end
+
+    {:keep_state, data, [{:reply, from, :ok}]}
   end
 
   def name(info_hash) when is_info_hash(info_hash) do

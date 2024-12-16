@@ -9,7 +9,7 @@ defmodule Bib do
   # - [ ] configurability (connection limits, etc.)
   # - [ ] mutliple files in a single torrent
   # - [ ] force update tracker
-  # - [ ] verify local data
+  # - [x] verify local data
   # - [x] remove torrent
   # - [x] pause torrent
   # - [x] resume torrent
@@ -53,7 +53,7 @@ defmodule Bib do
   end
 
   def verify_local_data(info_hash) when is_info_hash(info_hash) do
-    raise "todo"
+    Torrent.verify_local_data(info_hash)
   end
 
   def s() do
