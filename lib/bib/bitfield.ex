@@ -1,8 +1,8 @@
 defmodule Bib.Bitfield do
   # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
 
-  def new_padded(n) do
-    <<0::size(n)>> |> pad_to_binary()
+  def new_padded(n) when is_integer(n) and n > 0 do
+    pad_to_binary(<<0::size(n)>>)
   end
 
   @spec set_bit(nonempty_bitstring(), non_neg_integer()) :: nonempty_bitstring()
