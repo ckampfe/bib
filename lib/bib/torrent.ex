@@ -432,7 +432,6 @@ defmodule Bib.Torrent do
   @doc """
   https://wiki.theory.org/BitTorrentSpecification#Tracker_Request_Parameters
   """
-
   def announce(%Data{} = data, event \\ nil)
       when event in [:started, :completed, :stopped, nil] do
     left = MetaInfo.left(data.info_hash, data.pieces)
