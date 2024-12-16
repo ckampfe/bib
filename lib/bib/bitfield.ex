@@ -6,7 +6,8 @@ defmodule Bib.Bitfield do
   end
 
   @spec set_bit(nonempty_bitstring(), non_neg_integer()) :: nonempty_bitstring()
-  def set_bit(bitstring, index) when is_bitstring(bitstring) do
+  def set_bit(bitstring, index)
+      when is_bitstring(bitstring) and is_integer(index) and index >= 0 do
     <<a::bits-size(index), _::1, b::bits>> = bitstring
     <<a::bits, 1::1, b::bits>>
   end
