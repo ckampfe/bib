@@ -3,7 +3,7 @@
 # - [ ] configurable max download concurrency
 # - [ ] configurable max upload concurrency
 # - [x] verify local data on startup
-# - [ ] API to force verify of local data
+# - [x] API to force verify of local data
 # - [x] broadcast bitset to peer processes
 # - [x] broadcast `have` to peer processes when we receive and checksum a piece
 # - [x] generate peer id on startup

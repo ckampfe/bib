@@ -13,6 +13,7 @@ defmodule Bib do
   # - [x] remove torrent
   # - [x] pause torrent
   # - [x] resume torrent
+  # - [ ] ability to change listen port
 
   alias Bib.{Bencode, MetaInfo}
 
