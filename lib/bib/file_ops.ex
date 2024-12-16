@@ -1,4 +1,12 @@
 defmodule Bib.FileOps do
+  @moduledoc """
+  Functions to deal with reading and writing the data files that each
+  torrent downloads and uploads.
+
+  This module does not deal with .torrent metainfo.
+  See the `MetaInfo` and `Bencode` modules for that.
+  """
+
   alias Bib.{MetaInfo, Bitfield}
   import Bib.Macros
 

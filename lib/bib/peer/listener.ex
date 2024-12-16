@@ -1,4 +1,10 @@
 defmodule Bib.Peer.Listener do
+  @moduledoc """
+  Sets up and manages a socket that listens
+  for inbound peer connections on a port.
+  `Acceptor` processes handle the actual acceptance of those connections.
+  """
+
   use GenServer
   require Logger
 

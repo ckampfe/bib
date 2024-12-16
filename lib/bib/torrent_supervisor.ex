@@ -1,4 +1,11 @@
 defmodule Bib.TorrentSupervisor do
+  @moduledoc """
+  This process is the top process of the supervision tree for a single torrent.
+  All other processes dealing with bittorrent functionality
+  for a single active torrent are underneath this process, including torrent state
+  and peer TCP connections.
+  """
+
   use Supervisor
   require Logger
   import Bib.Macros

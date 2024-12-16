@@ -1,6 +1,7 @@
 defmodule Bib.TorrentsSupervisor do
   @moduledoc """
-  Supervises all torrent trees
+  Supervises all torrent trees.
+  Each new torrent gets a `TorrentSupervisor` and its children.
   """
 
   use DynamicSupervisor

@@ -24,6 +24,14 @@
 # Peer -> TorrentState API
 
 defmodule Bib.Torrent do
+  @moduledoc """
+  This process is the main location for a single torrent's state.
+  Each torrent gets one of these processes.
+  It communicates with `Peer` processes, which handle the TCP connections to remote peers.
+  It deals with tracker communication.
+  It's metainfo data (from the .torrent file) is stored in :persistent_term, see `name/1`
+  """
+
   @behaviour :gen_statem
 
   require Logger
@@ -248,7 +256,7 @@ defmodule Bib.Torrent do
 
     for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
       conn =
-        Peer.connect(data.info_hash, %Peer.Args{
+        Peer.connect(data.info_hash, %Peer.OutboundArgs{
           info_hash: data.info_hash,
           torrent_file: data.torrent_file,
           download_location: data.download_location,

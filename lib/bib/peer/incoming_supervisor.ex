@@ -1,4 +1,9 @@
 defmodule Bib.Peer.IncomingSupervisor do
+  @moduledoc """
+  Supervises the `Listener` and `Acceptor` processes
+  for a given torrent.
+  """
+
   use Supervisor
 
   def start_link(args) do

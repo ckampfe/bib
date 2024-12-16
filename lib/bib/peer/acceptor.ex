@@ -1,4 +1,14 @@
 defmodule Bib.Peer.Acceptor do
+  @moduledoc """
+  This process attempts to accept TCP connections from remote bittorrent peers.
+
+  If a remote peer successfully connects to us via this process, the connection is
+  handed off to a new `Peer` process for the respective torrent,
+  and this process goes back to accepting more TCP connections.
+
+  It does this in a loop.
+  """
+
   use GenServer
 
   alias Bib.Torrent
@@ -55,7 +65,7 @@ defmodule Bib.Peer.Acceptor do
            {:get_download_location, Torrent.get_download_location(challenge_info_hash)},
          {_, {:ok, peer_pid}} <-
            {:peer_accept,
-            Peer.accept_remote_peer_connection(challenge_info_hash, %Peer.AcceptArgs{
+            Peer.accept_remote_peer_connection(challenge_info_hash, %Peer.InboundArgs{
               info_hash: challenge_info_hash,
               socket: socket,
               peer_id: peer_id,

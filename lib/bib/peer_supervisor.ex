@@ -1,4 +1,10 @@
 defmodule Bib.PeerSupervisor do
+  @moduledoc """
+  This process starts and supervises `Peer` processes.
+  Every torrent gets one.
+  It is supervised by a `TorrentSupervisor` process.
+  """
+
   use DynamicSupervisor
   require Logger
   import Bib.Macros

@@ -1,4 +1,13 @@
 defmodule Bib.Bitfield do
+  @moduledoc """
+  Functions for working with the bitfield metadata that represents
+  which pieces of the torrent data we have and do not yet have.
+  It is a bitstring, with a single bit for each piece in the torrent.
+  A 1 means "have", a 0 means "not have".
+
+  The bitfield will have to be padded in order to send it on the wire.
+  """
+
   # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
 
   def new_padded(n) when is_integer(n) and n > 0 do

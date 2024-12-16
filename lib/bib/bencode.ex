@@ -1,4 +1,11 @@
 defmodule Bib.Bencode do
+  @moduledoc """
+  Functions for encoding and decoding bencode data.
+  Bencode data exists in two main places in bittorrent:
+  - tracker responses (see `announce`)
+  - the .torrent metainfo file. (see `MetaInfo` and `Bitfield`)
+  """
+
   def encode(term)
 
   def encode(m) when is_map(m) do

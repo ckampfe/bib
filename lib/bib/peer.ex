@@ -26,6 +26,16 @@
 # - [x] figure out 16kB blocks for pieces
 # - [ ] report download and upload to torrent state process
 defmodule Bib.Peer do
+  @moduledoc """
+  This process handles the TCP connection and state for a single remote
+  bittorrent peer for the given torrent.
+  It is supervised by a `PeerSupervisor`.
+  It is logically owned by a `Torrent` process,
+  and communicates mainly with the `Torrent` process.
+  It can be started from either the `Torrent` process (an outbound connection)
+  or from the `Acceptor` process (an inbound connection).
+  """
+
   @behaviour :gen_statem
 
   alias Bib.FileOps
@@ -69,7 +79,7 @@ defmodule Bib.Peer do
     ]
   end
 
-  defmodule Args do
+  defmodule OutboundArgs do
     @enforce_keys [:info_hash]
     defstruct [
       :info_hash,
@@ -83,7 +93,7 @@ defmodule Bib.Peer do
     ]
   end
 
-  defmodule AcceptArgs do
+  defmodule InboundArgs do
     @enforce_keys [:info_hash, :socket, :peer_id, :remote_peer_id, :remote_peer_address]
     defstruct [
       :info_hash,
@@ -114,14 +124,14 @@ defmodule Bib.Peer do
   @doc """
   start a peer process to connect to a remote peer
   """
-  def connect(info_hash, %Args{} = peer_args) when is_info_hash(info_hash) do
+  def connect(info_hash, %OutboundArgs{} = peer_args) when is_info_hash(info_hash) do
     PeerSupervisor.start_child(info_hash, peer_args)
   end
 
   @doc """
   start a peer process for a connection that was initiated by the remote peer
   """
-  def accept_remote_peer_connection(info_hash, %AcceptArgs{} = accept_args)
+  def accept_remote_peer_connection(info_hash, %InboundArgs{} = accept_args)
       when is_info_hash(info_hash) do
     PeerSupervisor.start_child(info_hash, accept_args)
   end
@@ -150,7 +160,7 @@ defmodule Bib.Peer do
   end
 
   @impl :gen_statem
-  def init(%Args{} = args) do
+  def init(%OutboundArgs{} = args) do
     state = %State{}
 
     data = %Data{
@@ -173,7 +183,7 @@ defmodule Bib.Peer do
   end
 
   @impl :gen_statem
-  def init(%AcceptArgs{} = args) do
+  def init(%InboundArgs{} = args) do
     Process.set_label("Peer connection to #{inspect(args.remote_peer_address)}")
 
     state = %State{}

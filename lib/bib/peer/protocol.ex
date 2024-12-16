@@ -1,4 +1,9 @@
 defmodule Bib.Peer.Protocol do
+  @moduledoc """
+  The peer protocol is used for sending and receiving data to and
+  from remote peers over TCP.
+  """
+
   alias Bib.Bitfield
 
   def decode(<<tag_byte, rest::binary>>) do

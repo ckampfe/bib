@@ -1,4 +1,13 @@
 defmodule Bib.MetaInfo do
+  @moduledoc """
+  Access functions for the .torrent metainfo data
+  that each torrent uses.
+
+  This data is immutable.
+  It is stored one time in `:persistent_term` on creation and then
+  never touched again until deletion.
+  """
+
   alias Bib.{Bencode, Bitfield}
   import Bib.Macros
 
