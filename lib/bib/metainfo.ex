@@ -103,7 +103,7 @@ defmodule Bib.MetaInfo do
   The total number of pieces in the torrent.
   """
   def number_of_pieces(info_hash) when is_info_hash(info_hash) do
-    round(__MODULE__.length(info_hash) / piece_length(info_hash))
+    Kernel.ceil(__MODULE__.length(info_hash) / piece_length(info_hash))
   end
 
   @doc """
