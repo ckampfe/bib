@@ -28,4 +28,33 @@ defmodule BencodeTest do
 
     assert m == roundtripped
   end
+
+  test "decode/1 errors on bad input" do
+    # dict with key but not value
+    assert {:error, "expecting to parse string length, got 'e'", 14} ==
+             Bencode.decode("d10:abcdefghije")
+
+    # dict without 'e' end
+    assert {:error, "expecting to parse dict end 'e' character, got end of input", 19} ==
+             Bencode.decode("d10:abcdefghij3:abc")
+
+    # integer with no digits
+    assert {:error, "expecting to parse integer digits, got 'x'", 1} == Bencode.decode("ixe")
+
+    # integer without 'e' end
+    assert {:error, "expecting to parse integer end 'e' character, got ''", 3} ==
+             Bencode.decode("i42")
+
+    # list without 'e' end
+    assert {:error, "expecting to parse list end 'e' character, got end of input", 14} ==
+             Bencode.decode("l10:abcdefghij")
+
+    # string with no separator
+    assert {:error, "expecting to parse string separator ':', got ''", 2} ==
+             Bencode.decode("14")
+
+    # string with no string
+    assert {:error, "expecting to parse string body with length 14, input ended early", 3} ==
+             Bencode.decode("14:abc")
+  end
 end

@@ -239,8 +239,15 @@ defmodule Bib.Torrent do
 
       {:next_state, %State{state: :started}, data, actions}
     else
-      e ->
-        raise e
+      {:announce_get, {:error, error}} ->
+        {:stop, "error announcing `started` to tracker: #{inspect(error)}"}
+
+      {:bencode_decode, {:error, error, position} = e} ->
+        Logger.debug(
+          "bencode decoding error when announcing `started`: #{error} at position #{position}"
+        )
+
+        {:stop, inspect(e)}
     end
   end
 
@@ -332,6 +339,32 @@ defmodule Bib.Torrent do
            :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok}
         ]
       }
+    else
+      {:announce_get, {:error, error}} ->
+        Logger.debug(
+          "Error announcing to tracker on the regular announce interval: #{inspect(error)}"
+        )
+
+        data = %Data{
+          data
+          | last_announce_at: Time.utc_now()
+        }
+
+        {
+          :keep_state,
+          data,
+          [
+            {{:timeout, :announce_timer},
+             :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok}
+          ]
+        }
+
+      {:bencode_decode, {:error, error, position} = e} ->
+        Logger.debug(
+          "bencode decoding error when announcing `started`: #{error} at position #{position}"
+        )
+
+        {:stop, inspect(e)}
     end
   end
 
@@ -354,12 +387,18 @@ defmodule Bib.Torrent do
             last_announce_at: Time.utc_now()
         }
 
-        # {:next_state, :started, data, [{:next_event, :internal, :connect_to_peers}]}
         {:keep_state, data, [{:reply, from, :ok}]}
       else
-        error ->
+        {:announce_get, {:error, error}} ->
           Logger.warning("error attempting to announce completion: #{inspect(error)}")
           {:keep_state, data, [{:reply, from, :ok}]}
+
+        {:bencode_decode, {:error, error, position} = e} ->
+          Logger.debug(
+            "bencode decoding error when announcing `started`: #{error} at position #{position}"
+          )
+
+          {:stop, inspect(e)}
       end
     else
       {:keep_state, data, [{:reply, from, :ok}]}

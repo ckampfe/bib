@@ -42,51 +42,104 @@ defmodule Bib.Bencode do
   end
 
   def decode(s) when is_binary(s) do
-    {out, rest} =
-      case s do
-        <<"d", rest::binary>> ->
-          decode_dict(rest, %{})
-
-        <<"l", rest::binary>> ->
-          decode_list(rest, [])
-
-        <<"i", rest::binary>> ->
-          decode_integer(rest)
-
-        rest ->
-          decode_string(rest)
-      end
-
-    {:ok, out, rest}
+    with {:ok, out, rest, position} <- decode_any(s, 0),
+         {_, true} <- {:decoded_all_input, position == byte_size(s)} do
+      {:ok, out, rest}
+    end
   end
 
-  defp decode_dict(<<"e", rest::binary>>, acc) do
-    {acc, rest}
+  defp decode_any(s, position) do
+    case s do
+      <<"d", rest::binary>> ->
+        decode_dict(rest, %{}, position + 1)
+
+      <<"l", rest::binary>> ->
+        decode_list(rest, [], position + 1)
+
+      <<"i", rest::binary>> ->
+        decode_integer(rest, position + 1)
+
+      rest ->
+        decode_string(rest, position)
+    end
   end
 
-  defp decode_dict(s, acc) do
-    {:ok, key, rest} = decode(s)
-    {:ok, value, rest} = decode(rest)
-    decode_dict(rest, Map.put(acc, key, value))
+  defp decode_dict(<<"e", rest::binary>>, acc, position) do
+    {:ok, acc, rest, position + 1}
   end
 
-  defp decode_list(<<"e", rest::binary>>, acc) do
-    {:lists.reverse(acc), rest}
+  defp decode_dict(<<>>, _acc, position) do
+    {:error, "expecting to parse dict end 'e' character, got end of input", position}
   end
 
-  defp decode_list(s, acc) do
-    {:ok, element, rest} = decode(s)
-    decode_list(rest, [element | acc])
+  defp decode_dict(s, acc, position) do
+    with {:ok, key, rest, position} <- decode_string(s, position),
+         {:ok, value, rest, position} <- decode_any(rest, position) do
+      decode_dict(rest, Map.put(acc, key, value), position)
+    end
   end
 
-  defp decode_integer(s) do
-    {i, <<"e", rest::binary>>} = Integer.parse(s)
-    {i, rest}
+  defp decode_list(<<>>, _acc, position) do
+    {:error, "expecting to parse list end 'e' character, got end of input", position}
   end
 
-  defp decode_string(s) do
-    {length, <<":", r::binary>>} = Integer.parse(s)
-    <<string::binary-size(length), rest::binary>> = r
-    {string, rest}
+  defp decode_list(<<"e", rest::binary>>, acc, position) do
+    {:ok, :lists.reverse(acc), rest, position + 1}
+  end
+
+  defp decode_list(s, acc, position) do
+    with {:ok, element, rest, position} <- decode_any(s, position) do
+      decode_list(rest, [element | acc], position)
+    end
+  end
+
+  defp decode_integer(s, position) do
+    with {_, {i, <<rest::binary>>}} <- {:integer_digits, Integer.parse(s)},
+         position = position + (byte_size(s) - byte_size(rest)),
+         {_, <<"e", rest::binary>>, position} <- {:integer_end, rest, position} do
+      {:ok, i, rest, position + 1}
+    else
+      {:integer_digits, :error} ->
+        {:error, "expecting to parse integer digits, got '#{take_byte(s)}'", position}
+
+      {:integer_end, rest, position} ->
+        {
+          :error,
+          "expecting to parse integer end 'e' character, got '#{take_byte(rest)}'",
+          position
+        }
+    end
+  end
+
+  defp decode_string(s, position) do
+    with {_, {length, <<rest::binary>>}, position} <-
+           {:string_length, Integer.parse(s), position},
+         position = position + (byte_size(s) - byte_size(rest)),
+         {_, <<":", rest::binary>>, position} <- {:string_separator, rest, position},
+         {_, <<string::binary-size(length), rest::binary>>, _length, position} <-
+           {:string_body, rest, length, position + 1},
+         position = position + length do
+      {:ok, string, rest, position}
+    else
+      {:string_length, :error, position} ->
+        {:error, "expecting to parse string length, got '#{take_byte(s)}'", position}
+
+      {:string_separator, rest, position} ->
+        {:error, "expecting to parse string separator ':', got '#{take_byte(rest)}'", position}
+
+      {:string_body, _rest, length, position} ->
+        {:error, "expecting to parse string body with length #{length}, input ended early",
+         position}
+    end
+  end
+
+  defp take_byte(s) do
+    case s do
+      <<>> ->
+        <<>>
+
+      <<b::binary-size(1), _rest::binary>> ->
+        b
+    end
   end
 end
