@@ -44,7 +44,7 @@ defmodule Bib do
   end
 
   def remove_torrent(info_hash) when is_info_hash(info_hash) do
-    pause_torrent(info_hash)
+    Bib.TorrentsSupervisor.stop_child(info_hash)
     :persistent_term.erase(Bib.MetaInfo.key(info_hash))
     :ok
   end
