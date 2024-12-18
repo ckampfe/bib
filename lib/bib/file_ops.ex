@@ -16,7 +16,12 @@ defmodule Bib.FileOps do
     0..(number_of_pieces - 1)
     |> Task.async_stream(fn index ->
       {:ok, fd} = :file.open(path, [:read, :raw])
-      {piece_matches_expected_hash?(info_hash, fd, index), index}
+
+      try do
+        {piece_matches_expected_hash?(info_hash, fd, index), index}
+      after
+        :file.close(fd)
+      end
     end)
     |> Enum.reduce(
       <<0::size(number_of_pieces)>>,
@@ -32,16 +37,26 @@ defmodule Bib.FileOps do
 
   def read_block(info_hash, path, index, begin, length) when is_info_hash(info_hash) do
     {:ok, fd} = :file.open(path, [:read, :raw])
-    piece_offset = MetaInfo.piece_offset(info_hash, index)
-    :file.pread(fd, piece_offset + begin, length)
+
+    try do
+      piece_offset = MetaInfo.piece_offset(info_hash, index)
+      :file.pread(fd, piece_offset + begin, length)
+    after
+      :file.close(fd)
+    end
   end
 
   def write_block_and_verify_piece(info_hash, path, index, begin, block)
       when is_info_hash(info_hash) do
-    with {:ok, fd} <- :file.open(path, [:write, :read, :raw, :binary]),
-         :ok <- write_block(fd, info_hash, index, begin, block),
-         {:ok, matches?} <- piece_matches_expected_hash?(info_hash, fd, index) do
-      {:ok, matches?}
+    {:ok, fd} = :file.open(path, [:write, :read, :raw, :binary])
+
+    try do
+      with :ok <- write_block(fd, info_hash, index, begin, block),
+           {:ok, matches?} <- piece_matches_expected_hash?(info_hash, fd, index) do
+        {:ok, matches?}
+      end
+    after
+      :file.close(fd)
     end
   end
 
@@ -66,14 +81,15 @@ defmodule Bib.FileOps do
   end
 
   def create_blank_file(path, length) when is_binary(path) and is_integer(length) do
-    with {:ok, fd} <-
-           :file.open(path, [
-             :exclusive,
-             :raw
-           ]),
-         {:ok, _} <- :file.position(fd, length),
-         :ok <- :file.truncate(fd) do
-      :ok
+    {:ok, fd} = :file.open(path, [:exclusive, :raw])
+
+    try do
+      with {:ok, _} <- :file.position(fd, length),
+           :ok <- :file.truncate(fd) do
+        :ok
+      end
+    after
+      :file.close(fd)
     end
   end
 
