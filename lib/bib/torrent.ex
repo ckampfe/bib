@@ -537,7 +537,9 @@ defmodule Bib.Torrent do
            {:bencode_decode, Bencode.decode(response.body)},
          decoded_announce_response <-
            Map.update!(decoded_announce_response, "peers", fn peers ->
-             parse_peers(peers)
+             peers
+             |> parse_peers()
+             |> not_me()
            end) do
       {:ok, Map.put(response, :body, decoded_announce_response)}
     end
@@ -561,6 +563,12 @@ defmodule Bib.Torrent do
 
         address
       end)
+    end)
+  end
+
+  defp not_me(peers) do
+    Enum.filter(peers, fn %{"ip" => ip} ->
+      ip != {127, 0, 0, 1}
     end)
   end
 
