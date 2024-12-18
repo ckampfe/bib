@@ -441,7 +441,7 @@ defmodule Bib.Torrent do
   end
 
   def handle_event({:call, from}, :accepting_connections?, %State{state: state}, %Data{} = _data) do
-    reply = state in [:started, :finished]
+    reply = state in [:initializing, :started, :finished]
     {:keep_state_and_data, [{:reply, from, reply}]}
   end
 
