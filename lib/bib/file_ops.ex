@@ -11,20 +11,23 @@ defmodule Bib.FileOps do
   import Bib.Macros
 
   def verify_local_data(info_hash, path) when is_info_hash(info_hash) and is_binary(path) do
-    {:ok, fd} = :file.open(path, [:read, :raw])
-
     number_of_pieces = MetaInfo.number_of_pieces(info_hash)
 
     0..(number_of_pieces - 1)
-    |> Enum.reduce(<<0::size(number_of_pieces)>>, fn index, pieces ->
-      case piece_matches_expected_hash?(info_hash, fd, index) do
-        {:ok, true} ->
+    |> Task.async_stream(fn index ->
+      {:ok, fd} = :file.open(path, [:read, :raw])
+      {piece_matches_expected_hash?(info_hash, fd, index), index}
+    end)
+    |> Enum.reduce(
+      <<0::size(number_of_pieces)>>,
+      fn
+        {:ok, {{:ok, true}, index}}, pieces ->
           Bitfield.set_bit(pieces, index)
 
-        {:ok, false} ->
+        _, pieces ->
           pieces
       end
-    end)
+    )
   end
 
   def read_block(info_hash, path, index, begin, length) when is_info_hash(info_hash) do
