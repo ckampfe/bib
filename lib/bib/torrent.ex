@@ -545,14 +545,14 @@ defmodule Bib.Torrent do
     end
   end
 
-  def parse_peers(peers) when is_binary(peers) do
+  defp parse_peers(peers) when is_binary(peers) do
     for <<a::big-integer-8, b::big-integer-8, c::big-integer-8, d::big-integer-8,
           port::big-integer-16 <- peers>> do
       %{"ip" => {a, b, c, d}, "port" => port}
     end
   end
 
-  def parse_peers(peers) when is_list(peers) do
+  defp parse_peers(peers) when is_list(peers) do
     peers
     |> Enum.map(fn peer ->
       Map.update!(peer, "ip", fn ip ->
