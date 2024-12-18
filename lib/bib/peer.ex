@@ -549,9 +549,9 @@ defmodule Bib.Peer do
 
       encoded = Protocol.encode(:interested)
 
-      Logger.debug("sent interested")
-
       :ok = :gen_tcp.send(data.socket, encoded)
+
+      Logger.debug("sent interested")
 
       if state.i_am_interested_in_peer do
         {
