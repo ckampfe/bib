@@ -35,7 +35,7 @@ defmodule Bib.Peer.Listener do
         {:noreply, state}
 
       {:error, error} ->
-        raise error
+        {:stop, error}
     end
   end
 
