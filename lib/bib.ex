@@ -14,6 +14,8 @@ defmodule Bib do
   # - [x] pause torrent
   # - [x] resume torrent
   # - [ ] ability to change listen port
+  # - [x] get peers api
+  # - [x] force announce api
 
   alias Bib.{Bencode, MetaInfo}
 
@@ -49,8 +51,12 @@ defmodule Bib do
     :ok
   end
 
-  def update_tracker(info_hash) when is_info_hash(info_hash) do
-    raise "todo"
+  def get_peers(info_hash) when is_info_hash(info_hash) do
+    Torrent.get_peers(info_hash)
+  end
+
+  def force_announce(info_hash) when is_info_hash(info_hash) do
+    Torrent.force_announce(info_hash)
   end
 
   def verify_local_data(info_hash) when is_info_hash(info_hash) do
@@ -59,5 +65,26 @@ defmodule Bib do
 
   def s() do
     add_torrent("/Users/clark/code/bib/a8dmfmt66t211.png.torrent", "/Users/clark/code/bib")
+  end
+
+  def a() do
+    add_torrent(
+      "/Users/clark/code/bib/fanimatrix_local.avi.torrent",
+      "/Users/clark/code/bib"
+    )
+  end
+
+  def aa() do
+    add_torrent(
+      "/Users/clark/code/bib/The-Fanimatrix-(DivX-5.1-HQ).avi.torrent",
+      "/Users/clark/code/bib"
+    )
+  end
+
+  def ubuntu() do
+    add_torrent(
+      "/Users/clark/Downloads/ubuntu-24.04.1-desktop-amd64.iso.torrent",
+      "/Users/clark/code/bib"
+    )
   end
 end

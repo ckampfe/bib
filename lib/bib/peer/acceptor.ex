@@ -54,7 +54,8 @@ defmodule Bib.Peer.Acceptor do
                 {:send_timeout_close, true}
               ]
             )},
-         {_, {:ok, remote_peer_address}} <- {:peername, :inet.peername(socket)},
+         {_, {:ok, {remote_peer_address, remote_peer_port}}} <-
+           {:peername, :inet.peername(socket)},
          _ = Logger.debug("accepted connection from #{inspect(remote_peer_address)}"),
          {_, {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}} <-
            {:receive_handshake, Peer.receive_handshake(socket)},
@@ -71,7 +72,8 @@ defmodule Bib.Peer.Acceptor do
               peer_id: peer_id,
               download_location: download_location,
               remote_peer_id: remote_peer_id,
-              remote_peer_address: remote_peer_address
+              remote_peer_address: remote_peer_address,
+              remote_peer_port: remote_peer_port
             })},
          {_, :ok} <- {:controlling_process, :gen_tcp.controlling_process(socket, peer_pid)},
          {_, :ok} <- {:send_handshake, Peer.handshake_peer(peer_pid)} do

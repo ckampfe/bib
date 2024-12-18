@@ -20,6 +20,9 @@
 # - [x] optimize metainfo so that each peer doesn't need a copy
 # - [ ] store a persistent list of torrents to load on boot
 # - [x] ability to get time until next announce
+# - [x] handle compact peer tracker responses
+# - [ ] request compact peer tracker response by default
+# - [ ] ability to download multiple files
 #
 # Peer -> TorrentState API
 
@@ -121,6 +124,14 @@ defmodule Bib.Torrent do
     :gen_statem.call(name(info_hash), :verify_local_data)
   end
 
+  def get_peers(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :get_peers)
+  end
+
+  def force_announce(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :force_announce)
+  end
+
   #############################################################################
   # END PUBLIC API
   #############################################################################
@@ -205,18 +216,12 @@ defmodule Bib.Torrent do
     left = MetaInfo.left(data.info_hash, data.pieces)
     Logger.debug(left: left)
 
-    with {_, {:ok, response}} <-
-           {:announce_get, announce(data, :started)},
-         {_, {:ok, decoded_announce_response, <<>>}} <-
-           {:bencode_decode, Bencode.decode(response.body)} do
+    with {:ok, response} <- announce(data, :started) do
       data = %Data{
         data
-        | announce_response: decoded_announce_response,
+        | announce_response: response.body,
           last_announce_at: Time.utc_now()
       }
-
-      Logger.debug(port: data.port)
-      Logger.debug("#{inspect(decoded_announce_response)}")
 
       Logger.debug(
         "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
@@ -252,37 +257,24 @@ defmodule Bib.Torrent do
   end
 
   def handle_event(:internal, :connect_to_peers, %State{}, %Data{} = data) do
-    available_peers =
-      data.announce_response
-      |> Map.fetch!("peers")
-      |> Enum.filter(fn %{"peer id" => peer_id} ->
-        peer_id != data.peer_id
-      end)
+    peers = Map.fetch!(data.announce_response, "peers")
 
-    Logger.debug(inspect(available_peers))
-
-    for %{"ip" => ip, "port" => port, "peer id" => remote_peer_id} <- available_peers do
-      conn =
-        Peer.connect(data.info_hash, %Peer.OutboundArgs{
-          info_hash: data.info_hash,
-          torrent_file: data.torrent_file,
-          download_location: data.download_location,
-          remote_peer_address: {ip, port},
-          remote_peer_id: remote_peer_id,
-          peer_id: data.peer_id,
-          pieces: data.pieces,
-          block_length: data.block_length
-        })
-
-      Logger.debug(inspect(conn))
+    for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
+          peers do
+      Peer.connect(data.info_hash, %Peer.OutboundArgs{
+        info_hash: data.info_hash,
+        torrent_file: data.torrent_file,
+        download_location: data.download_location,
+        remote_peer_address: remote_peer_address,
+        remote_peer_port: remote_peer_port,
+        remote_peer_id: remote_peer_id,
+        peer_id: data.peer_id,
+        pieces: data.pieces,
+        block_length: data.block_length
+      })
     end
 
-    {
-      :next_state,
-      %State{},
-      data,
-      []
-    }
+    {:next_state, %State{}, data, []}
   end
 
   # TODO:
@@ -317,13 +309,10 @@ defmodule Bib.Torrent do
   def handle_event({:timeout, :announce_timer}, :ok, %State{} = _state, %Data{} = data) do
     Logger.debug("regular announce timer")
 
-    with {_, {:ok, response}} <-
-           {:announce_get, announce(data)},
-         {_, {:ok, decoded_announce_response, <<>>}} <-
-           {:bencode_decode, Bencode.decode(response.body)} do
+    with {:ok, response} <- announce(data) do
       data = %Data{
         data
-        | announce_response: decoded_announce_response,
+        | announce_response: response.body,
           last_announce_at: Time.utc_now()
       }
 
@@ -377,13 +366,10 @@ defmodule Bib.Torrent do
     if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
 
-      with {_, {:ok, response}} <-
-             {:announce_get, announce(data, :completed)},
-           {_, {:ok, decoded_announce_response, <<>>}} <-
-             {:bencode_decode, Bencode.decode(response.body)} do
+      with {:ok, response} <- announce(data, :completed) do
         data = %Data{
           data
-          | announce_response: decoded_announce_response,
+          | announce_response: response.body,
             last_announce_at: Time.utc_now()
         }
 
@@ -419,13 +405,10 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, :pause, %State{} = state, %Data{} = data) do
     data =
-      with {_, {:ok, response}} <-
-             {:announce_get, announce(data, :stopped)},
-           {_, {:ok, decoded_announce_response, <<>>}} <-
-             {:bencode_decode, Bencode.decode(response.body)} do
+      with {_, {:ok, response}} <- {:announce_get, announce(data, :stopped)} do
         %Data{
           data
-          | announce_response: decoded_announce_response,
+          | announce_response: response.body,
             last_announce_at: Time.utc_now()
         }
       else
@@ -435,8 +418,9 @@ defmodule Bib.Torrent do
       end
 
     # TODO
-    # - shutdown currently connected peers
-    # - some way to not accept new peer connections...need to set state to :paused
+    # - [x] shutdown currently connected peers
+    send_to_all_peers_async(data.info_hash, :shutdown)
+    # - [_] some way to not accept new peer connections...need to set state to :paused
 
     state = %State{state | state: :paused}
 
@@ -493,30 +477,91 @@ defmodule Bib.Torrent do
     {:keep_state, data, [{:reply, from, :ok}]}
   end
 
+  def handle_event({:call, from}, :get_peers, %State{} = _state, %Data{} = data) do
+    announce_response = Map.get(data, :announce_response, %{})
+    peers = Map.get(announce_response, "peers", [])
+
+    {:keep_state_and_data, [{:reply, from, {:ok, peers}}]}
+  end
+
+  def handle_event({:call, from}, :force_announce, %State{} = _state, %Data{} = data) do
+    with {_, {:ok, response}} <- {:announce_get, announce(data)} do
+      %Data{
+        data
+        | announce_response: response.body,
+          last_announce_at: Time.utc_now()
+      }
+
+      {:keep_state, data, [{:reply, from, :ok}]}
+    else
+      e ->
+        Logger.warning("error attempting to announce on pause: #{inspect(e)}")
+        %Data{data | last_announce_at: Time.utc_now()}
+        {:keep_state, data, [{:reply, from, {:error, e}}]}
+    end
+  end
+
   def name(info_hash) when is_info_hash(info_hash) do
     {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 
-  @doc """
-  https://wiki.theory.org/BitTorrentSpecification#Tracker_Request_Parameters
-  """
-  def announce(%Data{} = data, event \\ nil)
-      when event in [:started, :completed, :stopped, nil] do
+  # https://wiki.theory.org/BitTorrentSpecification#Tracker_Request_Parameters
+  defp announce(%Data{} = data, event \\ nil)
+       when event in [:started, :completed, :stopped, nil] do
     left = MetaInfo.left(data.info_hash, data.pieces)
     tracker_url = MetaInfo.announce(data.info_hash)
-    event = Atom.to_string(event)
 
-    Req.get(tracker_url,
-      params: [
-        info_hash: data.info_hash,
-        peer_id: data.peer_id,
-        port: data.port,
-        left: left,
-        uploaded: data.uploaded,
-        downloaded: data.downloaded,
-        event: event
-      ]
-    )
+    params = [
+      info_hash: data.info_hash,
+      peer_id: data.peer_id,
+      port: data.port,
+      left: left,
+      uploaded: data.uploaded,
+      downloaded: data.downloaded
+    ]
+
+    params =
+      if event do
+        event = Atom.to_string(event)
+        params ++ [event: event]
+      else
+        params
+      end
+
+    with {_, {:ok, response}} <-
+           {:announce_get,
+            Req.get(tracker_url,
+              params: params
+            )},
+         {_, {:ok, decoded_announce_response, <<>>}} <-
+           {:bencode_decode, Bencode.decode(response.body)},
+         decoded_announce_response <-
+           Map.update!(decoded_announce_response, "peers", fn peers ->
+             parse_peers(peers)
+           end) do
+      {:ok, Map.put(response, :body, decoded_announce_response)}
+    end
+  end
+
+  def parse_peers(peers) when is_binary(peers) do
+    for <<a::big-integer-8, b::big-integer-8, c::big-integer-8, d::big-integer-8,
+          port::big-integer-16 <- peers>> do
+      %{"ip" => {a, b, c, d}, "port" => port}
+    end
+  end
+
+  def parse_peers(peers) when is_list(peers) do
+    peers
+    |> Enum.map(fn peer ->
+      Map.update!(peer, "ip", fn ip ->
+        {:ok, address} =
+          ip
+          |> to_charlist()
+          |> :inet.parse_address()
+
+        address
+      end)
+    end)
   end
 
   @impl :gen_statem
