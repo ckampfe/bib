@@ -24,14 +24,16 @@ defmodule Bib.Bitfield do
   def pad_to_binary(<<bitstring::bits>>) do
     size = :erlang.bit_size(bitstring)
 
-    remainder_of_8 = rem(size, 8)
-
-    if remainder_of_8 == 0 do
+    if divisible_by_8?(size) do
       bitstring
     else
-      zeros_to_pad = 8 - remainder_of_8
+      zeros_to_pad = 8 - rem(size, 8)
       <<bitstring::bits, 0::size(zeros_to_pad)>>
     end
+  end
+
+  defp divisible_by_8?(n) do
+    rem(n, 8) == 0
   end
 
   # from https://stackoverflow.com/questions/49555619/how-to-flip-a-single-specific-bit-in-an-erlang-bitstring
@@ -137,7 +139,7 @@ defmodule Bib.Bitfield do
         if bit == 1 do
           Map.update!(acc, :have, fn have -> have + 1 end)
         else
-          Map.update!(acc, :want, fn have -> have + 1 end)
+          Map.update!(acc, :want, fn want -> want + 1 end)
         end
     end
   end
