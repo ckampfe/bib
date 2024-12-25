@@ -8,7 +8,7 @@ defmodule Bib do
   # - [ ] tracking of upload/download stats per peer
   # - [ ] configurability (connection limits, etc.)
   # - [ ] mutliple files in a single torrent
-  # - [ ] force update tracker
+  # - [x] force update tracker
   # - [x] verify local data
   # - [x] remove torrent
   # - [x] pause torrent
