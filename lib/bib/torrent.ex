@@ -92,6 +92,10 @@ defmodule Bib.Torrent do
     |> :gen_statem.call({:have, index})
   end
 
+  def get_metadata(info_hash) when is_info_hash(info_hash) do
+    :gen_statem.call(name(info_hash), :get_metadata)
+  end
+
   def get_peer_id(info_hash) when is_info_hash(info_hash) do
     :gen_statem.call(name(info_hash), :get_peer_id)
   end
@@ -355,6 +359,26 @@ defmodule Bib.Torrent do
 
         {:stop, inspect(e)}
     end
+  end
+
+  def handle_event({:call, from}, :get_metadata, _state, %Data{} = data) do
+    total_pieces = MetaInfo.number_of_pieces(data.info_hash)
+    counts = Bitfield.counts(data.pieces)
+
+    metadata = %{
+      info_hash: data.info_hash,
+      name: MetaInfo.name(data.info_hash),
+      pieces: data.pieces,
+      progress: counts.have / total_pieces * 100,
+      have: counts.have,
+      want: counts.want,
+      seeders: 0,
+      leachers: 0,
+      download_speed: 0,
+      upload_speed: 0
+    }
+
+    {:keep_state, data, [{:reply, from, {:ok, metadata}}]}
   end
 
   def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do

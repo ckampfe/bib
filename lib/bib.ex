@@ -23,6 +23,16 @@ defmodule Bib do
   Documentation for `Bib`.
   """
 
+  def all_info_hashes do
+    Registry.select(Bib.Registry, [
+      {{{Bib.Torrent, :"$1"}, :"$2", :_}, [], [:"$1"]}
+    ])
+  end
+
+  def torrent_metadata(info_hash) when is_info_hash(info_hash) do
+    Torrent.get_metadata(info_hash)
+  end
+
   def add_torrent(torrent_file, download_location) do
     with {:ok, metainfo_binary} <- File.read(torrent_file),
          {:ok, decoded, <<>>} <- Bencode.decode(metainfo_binary),
