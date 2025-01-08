@@ -298,6 +298,8 @@ defmodule Bib.Torrent do
 
       for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
             peers do
+        # TODO:
+        # figure out how to not connect to already connected peers
         Peer.connect(data.info_hash, %Peer.OutboundArgs{
           info_hash: data.info_hash,
           torrent_file: data.torrent_file,
