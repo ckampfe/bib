@@ -51,10 +51,12 @@ defmodule Bib.Torrent do
       :torrent_file,
       :download_location,
       :peer_id,
-      :announce_response,
       :pieces,
       :port,
       :last_announce_at,
+      :announce_ref,
+      announce_response: %{},
+      announce_interval: 120,
       uploaded: 0,
       downloaded: 0,
       max_uploads: 4,
@@ -80,6 +82,8 @@ defmodule Bib.Torrent do
     send_to_peers_async(peers, message)
   end
 
+  # TODO: use pg for this?
+  # https://www.erlang.org/doc/apps/kernel/pg.ht
   def send_to_peers_async(peers, message) when is_list(peers) do
     Enum.each(peers, fn peer ->
       Peer.cast(peer, message)
@@ -159,7 +163,14 @@ defmodule Bib.Torrent do
       port: args.port
     }
 
-    {:ok, state, data, [{:next_event, :internal, :load_metainfo_file}]}
+    {
+      :ok,
+      state,
+      data,
+      [
+        {:next_event, :internal, :load_metainfo_file}
+      ]
+    }
   end
 
   # def handle_event(:enter, _oldstate, %State{state: :initializing}, data) do
@@ -197,7 +208,17 @@ defmodule Bib.Torrent do
 
       data = %Data{data | pieces: pieces}
 
-      {:keep_state, data, [{:next_event, :internal, :announce_started}]}
+      {
+        :next_state,
+        %State{state: :started},
+        data,
+        [
+          {{:timeout, :choke_timer}, :timer.seconds(10), :ok},
+          {{:timeout, :download_timer}, :timer.seconds(5), :ok},
+          {{:timeout, :announce_timer}, :timer.seconds(data.announce_interval), :ok},
+          {:next_event, :internal, :announce}
+        ]
+      }
     else
       Logger.debug(
         "#{download_filename} does not exist, creating and truncating to length #{MetaInfo.length(data.info_hash)}"
@@ -205,80 +226,153 @@ defmodule Bib.Torrent do
 
       _ = FileOps.create_blank_file(download_filename, MetaInfo.length(data.info_hash))
 
-      {:keep_state, data, [{:next_event, :internal, :announce_started}]}
+      {
+        :next_state,
+        %State{state: :started},
+        data,
+        [
+          {{:timeout, :choke_timer}, :timer.seconds(10), :ok},
+          {{:timeout, :download_timer}, :timer.seconds(5), :ok},
+          {{:timeout, :announce_timer}, :timer.seconds(data.announce_interval), :ok},
+          {:next_event, :internal, :announce}
+        ]
+      }
     end
 
     # data = %Data{data | pieces: <<>>}
     # TODO update with verified data
   end
 
-  def handle_event(:internal, :announce_started, %State{} = _state, %Data{} = data) do
-    %{have: have, want: want} = Bitfield.counts(data.pieces)
-    Logger.debug("have: #{have} pieces")
-    Logger.debug("want: #{want} pieces")
+  # handle the response from the announce request
+  def handle_event(
+        :info,
+        {ref, response},
+        %State{} = _state,
+        %Data{announce_ref: ref} = data
+      ) do
+    Process.demonitor(ref, [:flush])
 
-    left = MetaInfo.left(data.info_hash, data.pieces)
-    Logger.debug(left: left)
+    data =
+      case response do
+        {:ok, response} ->
+          %Data{
+            data
+            | announce_response: response.body,
+              last_announce_at: Time.utc_now(),
+              announce_interval: Map.fetch!(response.body, "interval")
+          }
 
-    with {:ok, response} <- announce(data, :started) do
-      data = %Data{
-        data
-        | announce_response: response.body,
-          last_announce_at: Time.utc_now()
-      }
+        {:announce_get, {:error, e}} ->
+          Logger.debug("got network error when announcing to tracker: #{inspect(e)}")
+          data
 
-      Logger.debug(
-        "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
-      )
+        {:bencode_decode, e} ->
+          Logger.debug("got bencode error when announcing to tracker: #{inspect(e)}")
+          data
+      end
 
-      timers =
-        [
-          {{:timeout, :announce_timer},
-           :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok},
-          {{:timeout, :choke_timer}, :timer.seconds(10), :ok}
-        ]
+    data = %Data{data | announce_ref: nil}
 
-      actions =
-        if left > 0 do
-          timers ++ [{:next_event, :internal, :connect_to_peers}]
-        else
-          Logger.debug("we have all pieces at startup, not connecting to other peers")
-          timers
-        end
-
-      {:next_state, %State{state: :started}, data, actions}
-    else
-      {:announce_get, {:error, error}} ->
-        {:stop, "error announcing `started` to tracker: #{inspect(error)}"}
-
-      {:bencode_decode, {:error, error, position} = e} ->
-        Logger.debug(
-          "bencode decoding error when announcing `started`: #{error} at position #{position}"
-        )
-
-        {:stop, inspect(e)}
-    end
+    {
+      :keep_state,
+      data
+    }
   end
 
-  def handle_event(:internal, :connect_to_peers, %State{}, %Data{} = data) do
-    peers = Map.fetch!(data.announce_response, "peers")
+  def handle_event(
+        :info,
+        {:DOWN, ref, :process, _pid, _reason},
+        %State{},
+        %Data{announce_ref: ref} = data
+      ) do
+    data = %Data{data | announce_ref: nil}
+    {:keep_state, data}
+  end
 
-    for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
-          peers do
-      Peer.connect(data.info_hash, %Peer.OutboundArgs{
-        info_hash: data.info_hash,
-        torrent_file: data.torrent_file,
-        download_location: data.download_location,
-        remote_peer_address: remote_peer_address,
-        remote_peer_port: remote_peer_port,
-        remote_peer_id: remote_peer_id,
-        peer_id: data.peer_id,
-        pieces: data.pieces,
-        block_length: data.block_length
-      })
+  def handle_event({:timeout, :download_timer}, :ok, %State{} = state, %Data{} = data) do
+    # TODO actually do stuff where we connect to peers and download!
+    Logger.debug("download timer. state is #{inspect(state)}")
+
+    if peers = Map.get(data.announce_response, "peers") do
+      Logger.debug("connecting to peers because we have some")
+
+      for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
+            peers do
+        Peer.connect(data.info_hash, %Peer.OutboundArgs{
+          info_hash: data.info_hash,
+          torrent_file: data.torrent_file,
+          download_location: data.download_location,
+          remote_peer_address: remote_peer_address,
+          remote_peer_port: remote_peer_port,
+          remote_peer_id: remote_peer_id,
+          peer_id: data.peer_id,
+          pieces: data.pieces,
+          block_length: data.block_length
+        })
+      end
+    else
+      Logger.debug("not connecting to peers because we don't have any")
     end
 
-    {:next_state, %State{}, data, []}
+    {:keep_state_and_data, [{{:timeout, :download_timer}, :timer.seconds(5), :ok}]}
+  end
+
+  # def handle_event(:internal, :connect_to_peers, %State{}, %Data{} = data) do
+  #   peers = Map.fetch!(data.announce_response, "peers")
+
+  #   for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
+  #         peers do
+  #     Peer.connect(data.info_hash, %Peer.OutboundArgs{
+  #       info_hash: data.info_hash,
+  #       torrent_file: data.torrent_file,
+  #       download_location: data.download_location,
+  #       remote_peer_address: remote_peer_address,
+  #       remote_peer_port: remote_peer_port,
+  #       remote_peer_id: remote_peer_id,
+  #       peer_id: data.peer_id,
+  #       pieces: data.pieces,
+  #       block_length: data.block_length
+  #     })
+  #   end
+
+  #   {:next_state, %State{}, data, []}
+  # end
+
+  # if there is a current announce task in flight,
+  # do nothing.
+  def handle_event(
+        :internal,
+        :announce,
+        %State{},
+        %Data{announce_ref: announce_ref} = data
+      )
+      when not is_nil(announce_ref) do
+    {
+      :keep_state,
+      data,
+      []
+    }
+  end
+
+  # if there is no current announce task in flight,
+  # we are good to go, schedule an announce in a task
+  def handle_event(
+        :internal,
+        :announce,
+        %State{} = state,
+        %Data{announce_ref: announce_ref} = data
+      )
+      when is_nil(announce_ref) do
+    announce_task =
+      Task.Supervisor.async_nolink(Bib.TaskSupervisor, __MODULE__, :announce, [data, state.state])
+
+    data = %Data{data | announce_ref: announce_task.ref}
+
+    {
+      :keep_state,
+      data,
+      []
+    }
   end
 
   # TODO:
@@ -311,57 +405,17 @@ defmodule Bib.Torrent do
   end
 
   def handle_event({:timeout, :announce_timer}, :ok, %State{} = _state, %Data{} = data) do
-    Logger.debug("regular announce timer")
-
-    with {:ok, response} <- announce(data) do
-      data = %Data{
-        data
-        | announce_response: response.body,
-          last_announce_at: Time.utc_now()
-      }
-
-      Logger.debug(
-        "announcing again in #{Map.fetch!(data.announce_response, "interval")} seconds"
-      )
-
-      {
-        :keep_state,
-        data,
-        [
-          {{:timeout, :announce_timer},
-           :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok}
-        ]
-      }
-    else
-      {:announce_get, {:error, error}} ->
-        Logger.debug(
-          "Error announcing to tracker on the regular announce interval: #{inspect(error)}"
-        )
-
-        data = %Data{
-          data
-          | last_announce_at: Time.utc_now()
-        }
-
-        {
-          :keep_state,
-          data,
-          [
-            {{:timeout, :announce_timer},
-             :timer.seconds(Map.fetch!(data.announce_response, "interval")), :ok}
-          ]
-        }
-
-      {:bencode_decode, {:error, error, position} = e} ->
-        Logger.debug(
-          "bencode decoding error when announcing `started`: #{error} at position #{position}"
-        )
-
-        {:stop, inspect(e)}
-    end
+    {
+      :keep_state,
+      data,
+      [
+        {:next_event, :internal, :announce},
+        {{:timeout, :announce_timer}, :timer.seconds(data.announce_interval), :ok}
+      ]
+    }
   end
 
-  def handle_event({:call, from}, :get_metadata, _state, %Data{} = data) do
+  def handle_event({:call, from}, :get_metadata, state, %Data{} = data) do
     total_pieces = MetaInfo.number_of_pieces(data.info_hash)
     counts = Bitfield.counts(data.pieces)
 
@@ -372,6 +426,7 @@ defmodule Bib.Torrent do
       progress: counts.have / total_pieces * 100,
       have: counts.have,
       want: counts.want,
+      state: Atom.to_string(state.state),
       seeders: 0,
       leachers: 0,
       download_speed: 0,
@@ -390,6 +445,7 @@ defmodule Bib.Torrent do
     if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
 
+      # TODO use the Task for this
       with {:ok, response} <- announce(data, :completed) do
         data = %Data{
           data
@@ -427,26 +483,13 @@ defmodule Bib.Torrent do
     {:keep_state_and_data, [{:reply, from, {:ok, data.download_location}}]}
   end
 
-  def handle_event({:call, from}, :pause, %State{} = state, %Data{} = data) do
-    data =
-      with {_, {:ok, response}} <- {:announce_get, announce(data, :stopped)} do
-        %Data{
-          data
-          | announce_response: response.body,
-            last_announce_at: Time.utc_now()
-        }
-      else
-        e ->
-          Logger.warning("error attempting to announce on pause: #{inspect(e)}")
-          %Data{data | last_announce_at: Time.utc_now()}
-      end
-
+  def handle_event({:call, from}, :pause, %State{}, %Data{} = data) do
     # TODO
     # - [x] shutdown currently connected peers
     send_to_all_peers_async(data.info_hash, :shutdown)
     # - [_] some way to not accept new peer connections...need to set state to :paused
 
-    state = %State{state | state: :paused}
+    state = %State{state: :stopped}
 
     {
       :next_state,
@@ -454,14 +497,27 @@ defmodule Bib.Torrent do
       data,
       [
         {:reply, from, :ok},
+        {{:timeout, :choke_timer}, :infinity, :ok},
+        {{:timeout, :download_timer}, :infinity, :ok},
         {{:timeout, :announce_timer}, :infinity, :ok},
-        {{:timeout, :choke_timer}, :infinity, :ok}
+        {:next_event, :internal, :announce}
       ]
     }
   end
 
-  def handle_event({:call, from}, :resume, _state, %Data{} = _data) do
-    {:keep_state_and_data, [{:reply, from, :ok}, {:next_event, :internal, :announce_started}]}
+  def handle_event({:call, from}, :resume, _state, %Data{} = data) do
+    {
+      :next_state,
+      %State{state: :started},
+      data,
+      [
+        {:reply, from, :ok},
+        {{:timeout, :choke_timer}, :timer.seconds(10), :ok},
+        {{:timeout, :download_timer}, :timer.seconds(5), :ok},
+        {{:timeout, :announce_timer}, :timer.seconds(data.announce_interval), :ok},
+        {:next_event, :internal, :announce}
+      ]
+    }
   end
 
   def handle_event({:call, from}, :accepting_connections?, %State{state: state}, %Data{} = _data) do
@@ -509,20 +565,19 @@ defmodule Bib.Torrent do
   end
 
   def handle_event({:call, from}, :force_announce, %State{} = _state, %Data{} = data) do
-    with {_, {:ok, response}} <- {:announce_get, announce(data)} do
-      %Data{
-        data
-        | announce_response: response.body,
-          last_announce_at: Time.utc_now()
-      }
+    Logger.debug("force announce")
+    # TODO either here or somewhere else decide whether to
+    # actually announce based on when the last announce was,
+    # to prevent spamming the tracker
 
-      {:keep_state, data, [{:reply, from, :ok}]}
-    else
-      e ->
-        Logger.warning("error attempting to announce on pause: #{inspect(e)}")
-        %Data{data | last_announce_at: Time.utc_now()}
-        {:keep_state, data, [{:reply, from, {:error, e}}]}
-    end
+    {
+      :keep_state,
+      data,
+      [
+        {:reply, from, :ok},
+        {:next_event, :internal, :announce}
+      ]
+    }
   end
 
   def name(info_hash) when is_info_hash(info_hash) do
@@ -530,8 +585,9 @@ defmodule Bib.Torrent do
   end
 
   # https://wiki.theory.org/BitTorrentSpecification#Tracker_Request_Parameters
-  defp announce(%Data{} = data, event \\ nil)
-       when event in [:started, :completed, :stopped, nil] do
+  def announce(%Data{} = data, event \\ nil)
+      when event in [:started, :completed, :stopped, nil] do
+    Logger.debug("Announcing...")
     left = MetaInfo.left(data.info_hash, data.pieces)
     tracker_url = MetaInfo.announce(data.info_hash)
 
