@@ -640,7 +640,6 @@ defmodule Bib.Peer do
     Logger.debug("received have from torrent, updating own bitfield")
     encoded = Protocol.encode({:have, index})
     :ok = :gen_tcp.send(data.socket, encoded)
-    # data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
     {:keep_state, data}
   end
 
