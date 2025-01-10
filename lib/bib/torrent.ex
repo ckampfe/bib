@@ -38,7 +38,7 @@ defmodule Bib.Torrent do
   @behaviour :gen_statem
 
   require Logger
-  alias Bib.{Bencode, MetaInfo, Peer, Bitfield, PeerSupervisor, FileOps}
+  alias Bib.{Bencode, MetaInfo, Peer, PeerSupervisor, FileOps, PiecesServer}
   import Bib.Macros
 
   defmodule State do
@@ -51,7 +51,6 @@ defmodule Bib.Torrent do
       :torrent_file,
       :download_location,
       :peer_id,
-      :pieces,
       :port,
       :last_announce_at,
       :announce_ref,
@@ -102,10 +101,6 @@ defmodule Bib.Torrent do
 
   def get_peer_id(info_hash) when is_info_hash(info_hash) do
     :gen_statem.call(name(info_hash), :get_peer_id)
-  end
-
-  def get_pieces(info_hash) when is_info_hash(info_hash) do
-    :gen_statem.call(name(info_hash), :get_pieces)
   end
 
   def get_download_location(info_hash) when is_info_hash(info_hash) do
@@ -181,7 +176,7 @@ defmodule Bib.Torrent do
   @impl :gen_statem
   def handle_event(:internal, :load_metainfo_file, %State{} = _state, %Data{} = data) do
     number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
-    data = %Data{data | pieces: <<0::size(number_of_pieces)>>}
+    PiecesServer.insert(data.info_hash, <<0::size(number_of_pieces)>>)
 
     Logger.debug("Starting torrent for #{MetaInfo.name(data.info_hash)}")
 
@@ -196,6 +191,8 @@ defmodule Bib.Torrent do
     {:keep_state, data, [{:next_event, :internal, :verify_local_data}]}
   end
 
+  # TODO actually do not set download timer here
+  # in the case that we have all pieces and are seeding
   def handle_event(:internal, :verify_local_data, %State{} = _state, %Data{} = data) do
     Logger.debug("verifying local data for #{data.torrent_file}")
 
@@ -206,7 +203,7 @@ defmodule Bib.Torrent do
 
       pieces = FileOps.verify_local_data(data.info_hash, download_filename)
 
-      data = %Data{data | pieces: pieces}
+      :ok = PiecesServer.insert(data.info_hash, pieces)
 
       {
         :next_state,
@@ -289,6 +286,13 @@ defmodule Bib.Torrent do
     {:keep_state, data}
   end
 
+  def handle_event({:timeout, :download_timer}, :ok, %State{state: :completed}, %Data{}) do
+    {:keep_state_and_data,
+     [
+       {{:timeout, :download_timer}, :infinity, :ok}
+     ]}
+  end
+
   def handle_event({:timeout, :download_timer}, :ok, %State{} = state, %Data{} = data) do
     # TODO actually do stuff where we connect to peers and download!
     Logger.debug("download timer. state is #{inspect(state)}")
@@ -296,21 +300,38 @@ defmodule Bib.Torrent do
     if peers = Map.get(data.announce_response, "peers") do
       Logger.debug("connecting to peers because we have some")
 
+      {:ok, pieces} = PiecesServer.get(data.info_hash)
+
       for %{"ip" => remote_peer_address, "port" => remote_peer_port, "peer id" => remote_peer_id} <-
             peers do
         # TODO:
         # figure out how to not connect to already connected peers
-        Peer.connect(data.info_hash, %Peer.OutboundArgs{
-          info_hash: data.info_hash,
-          torrent_file: data.torrent_file,
-          download_location: data.download_location,
-          remote_peer_address: remote_peer_address,
-          remote_peer_port: remote_peer_port,
-          remote_peer_id: remote_peer_id,
-          peer_id: data.peer_id,
-          pieces: data.pieces,
-          block_length: data.block_length
-        })
+        # this way is kinda hacky and won't work if the remote doesn't
+        # have a peer id due to the tracker returning compact peers.
+        # use ip and port? idk
+
+        peers = PeerSupervisor.peers(data.info_hash)
+
+        peer_ids =
+          peers
+          |> Enum.map(fn pid ->
+            Peer.remote_peer_id(pid)
+          end)
+          |> Enum.into(MapSet.new())
+
+        if !MapSet.member?(peer_ids, remote_peer_id) do
+          Peer.connect(data.info_hash, %Peer.OutboundArgs{
+            info_hash: data.info_hash,
+            torrent_file: data.torrent_file,
+            download_location: data.download_location,
+            remote_peer_address: remote_peer_address,
+            remote_peer_port: remote_peer_port,
+            remote_peer_id: remote_peer_id,
+            peer_id: data.peer_id,
+            pieces: pieces,
+            block_length: data.block_length
+          })
+        end
       end
     else
       Logger.debug("not connecting to peers because we don't have any")
@@ -419,12 +440,13 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, :get_metadata, state, %Data{} = data) do
     total_pieces = MetaInfo.number_of_pieces(data.info_hash)
-    counts = Bitfield.counts(data.pieces)
+    {:ok, counts} = PiecesServer.counts(data.info_hash)
+    {:ok, pieces} = PiecesServer.get(data.info_hash)
 
     metadata = %{
       info_hash: data.info_hash,
       name: MetaInfo.name(data.info_hash),
-      pieces: data.pieces,
+      pieces: pieces,
       progress: counts.have / total_pieces * 100,
       have: counts.have,
       want: counts.want,
@@ -439,10 +461,9 @@ defmodule Bib.Torrent do
   end
 
   def handle_event({:call, from}, {:have, index}, _state, %Data{} = data) do
-    data = %Data{data | pieces: Bitfield.set_bit(data.pieces, index)}
     send_to_all_peers_async(data.info_hash, {:have, index})
 
-    %{have: have, want: want} = Bitfield.counts(data.pieces)
+    {:ok, %{have: have, want: want}} = PiecesServer.counts(data.info_hash)
 
     if want == 0 && have == MetaInfo.number_of_pieces(data.info_hash) do
       Logger.info("Complete!")
@@ -455,7 +476,7 @@ defmodule Bib.Torrent do
             last_announce_at: Time.utc_now()
         }
 
-        {:keep_state, data, [{:reply, from, :ok}]}
+        {:next_state, %State{state: :completed}, data, [{:reply, from, :ok}]}
       else
         {:announce_get, {:error, error}} ->
           Logger.warning("error attempting to announce completion: #{inspect(error)}")
@@ -475,10 +496,6 @@ defmodule Bib.Torrent do
 
   def handle_event({:call, from}, :get_peer_id, _state, %Data{} = data) do
     {:keep_state_and_data, [{:reply, from, {:ok, data.peer_id}}]}
-  end
-
-  def handle_event({:call, from}, :get_pieces, _state, %Data{} = data) do
-    {:keep_state_and_data, [{:reply, from, {:ok, data.pieces}}]}
   end
 
   def handle_event({:call, from}, :get_download_location, _state, %Data{} = data) do
@@ -545,16 +562,15 @@ defmodule Bib.Torrent do
   def handle_event({:call, from}, :verify_local_data, %State{} = _state, %Data{} = data) do
     download_filename = Path.join([data.download_location, MetaInfo.name(data.info_hash)])
 
-    data =
-      if File.exists?(download_filename) do
-        Logger.debug("#{download_filename} exists, verifying")
-        pieces = FileOps.verify_local_data(data.info_hash, download_filename)
-        %Data{data | pieces: pieces}
-      else
-        Logger.debug("#{download_filename} does not exist")
-        number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
-        %Data{data | pieces: <<0::size(number_of_pieces)>>}
-      end
+    if File.exists?(download_filename) do
+      Logger.debug("#{download_filename} exists, verifying")
+      pieces = FileOps.verify_local_data(data.info_hash, download_filename)
+      PiecesServer.insert(data.info_hash, pieces)
+    else
+      Logger.debug("#{download_filename} does not exist")
+      number_of_pieces = MetaInfo.number_of_pieces(data.info_hash)
+      PiecesServer.insert(data.info_hash, <<0::size(number_of_pieces)>>)
+    end
 
     {:keep_state, data, [{:reply, from, :ok}]}
   end
@@ -590,7 +606,8 @@ defmodule Bib.Torrent do
   def announce(%Data{} = data, event \\ nil)
       when event in [:started, :completed, :stopped, nil] do
     Logger.debug("Announcing...")
-    left = MetaInfo.left(data.info_hash, data.pieces)
+    {:ok, pieces} = PiecesServer.get(data.info_hash)
+    left = MetaInfo.left(data.info_hash, pieces)
     tracker_url = MetaInfo.announce(data.info_hash)
 
     params = [

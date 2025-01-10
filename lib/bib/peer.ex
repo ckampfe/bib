@@ -38,8 +38,7 @@ defmodule Bib.Peer do
 
   @behaviour :gen_statem
 
-  alias Bib.FileOps
-  alias Bib.{Torrent, Bitfield, PeerSupervisor, MetaInfo}
+  alias Bib.{Torrent, Bitfield, PeerSupervisor, MetaInfo, PiecesServer, FileOps}
   alias Bib.Peer.Protocol
   import Bib.Macros
 
@@ -72,7 +71,6 @@ defmodule Bib.Peer do
       :remote_peer_address,
       :remote_peer_port,
       :remote_peer_id,
-      :my_pieces,
       :peer_pieces,
       interest_interval: :timer.minutes(1),
       keepalive_interval: :timer.seconds(30),
@@ -169,6 +167,10 @@ defmodule Bib.Peer do
     :gen_statem.call(peer, :send_handshake)
   end
 
+  def remote_peer_id(peer) when is_pid(peer) do
+    :gen_statem.call(peer, :remote_peer_id)
+  end
+
   @impl :gen_statem
   def init(%OutboundArgs{} = args) do
     state = %State{}
@@ -181,7 +183,6 @@ defmodule Bib.Peer do
       remote_peer_port: args.remote_peer_port,
       remote_peer_id: args.remote_peer_id,
       peer_id: args.peer_id,
-      my_pieces: args.pieces,
       peer_pieces: Bitfield.new_padded(MetaInfo.number_of_pieces(args.info_hash)),
       block_length: args.block_length
     }
@@ -222,14 +223,13 @@ defmodule Bib.Peer do
   def handle_event(:internal, :send_handshake, %State{} = _state, %Data{} = data) do
     :ok = send_handshake(data.socket, data.info_hash, data.peer_id)
     Logger.debug("sent handshake")
-    {:ok, pieces} = Torrent.get_pieces(data.info_hash)
-    data = %Data{data | my_pieces: pieces}
     :ok = set_socket_opts(data.socket)
     {:keep_state, data, [{:next_event, :internal, :send_bitfield}]}
   end
 
   def handle_event(:internal, :send_bitfield, %State{} = _state, %Data{} = data) do
-    bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
+    {:ok, my_pieces} = PiecesServer.get(data.info_hash)
+    bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, my_pieces})
     :ok = :gen_tcp.send(data.socket, bitfield_encoded)
     Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
     :keep_state_and_data
@@ -278,7 +278,8 @@ defmodule Bib.Peer do
 
       :ok = set_socket_opts(data.socket)
 
-      bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, data.my_pieces})
+      {:ok, my_pieces} = PiecesServer.get(data.info_hash)
+      bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, my_pieces})
       Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
       :ok = :gen_tcp.send(data.socket, bitfield_encoded)
 
@@ -366,7 +367,9 @@ defmodule Bib.Peer do
         %State{i_am_interested_in_peer: true, peer_is_choking_me: false} = _state,
         %Data{} = data
       ) do
-    case Bitfield.random_wanted_piece(data.peer_pieces, data.my_pieces) do
+    {:ok, my_pieces} = PiecesServer.get(data.info_hash)
+
+    case Bitfield.random_wanted_piece(data.peer_pieces, my_pieces) do
       nil ->
         Logger.debug("no random wanted piece")
         :keep_state_and_data
@@ -432,11 +435,13 @@ defmodule Bib.Peer do
         %State{} = state,
         %Data{} = data
       ) do
-    if byte_size(bitfield) == byte_size(Bitfield.pad_to_binary(data.my_pieces)) do
+    {:ok, my_pieces} = PiecesServer.get(data.info_hash)
+
+    if byte_size(bitfield) == byte_size(Bitfield.pad_to_binary(my_pieces)) do
       Logger.debug("received good bitfield")
       data = %Data{data | peer_pieces: bitfield}
 
-      if Bitfield.right_has_some_left_doesnt_have(data.my_pieces, data.peer_pieces) do
+      if Bitfield.right_has_some_left_doesnt_have(my_pieces, data.peer_pieces) do
         Logger.debug("I am interested in peer due to bitfield")
         state = %State{state | i_am_interested_in_peer: true}
         :ok = set_socket_opts(data.socket)
@@ -512,7 +517,7 @@ defmodule Bib.Peer do
 
         :ok = Torrent.have(data.info_hash, index)
 
-        data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
+        :ok = PiecesServer.set(data.info_hash, index)
 
         :ok = set_socket_opts(data.socket)
 
@@ -543,7 +548,9 @@ defmodule Bib.Peer do
   # end
 
   def handle_event({:timeout, :interest_timer}, :ok, %State{} = state, %Data{} = data) do
-    if Bitfield.right_has_some_left_doesnt_have(data.my_pieces, data.peer_pieces) do
+    {:ok, my_pieces} = PiecesServer.get(data.info_hash)
+
+    if Bitfield.right_has_some_left_doesnt_have(my_pieces, data.peer_pieces) do
       # interested
       Logger.debug("I am interested")
 
@@ -633,7 +640,7 @@ defmodule Bib.Peer do
     Logger.debug("received have from torrent, updating own bitfield")
     encoded = Protocol.encode({:have, index})
     :ok = :gen_tcp.send(data.socket, encoded)
-    data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
+    # data = %Data{data | my_pieces: Bitfield.set_bit(data.my_pieces, index)}
     {:keep_state, data}
   end
 
@@ -643,6 +650,10 @@ defmodule Bib.Peer do
        {:reply, from, :ok},
        {:next_event, :internal, :send_handshake}
      ]}
+  end
+
+  def handle_event({:call, from}, :remote_peer_id, %State{} = _state, %Data{} = data) do
+    {:keep_state_and_data, [{:reply, from, data.remote_peer_id}]}
   end
 
   def handle_event(:cast, :shutdown, %State{} = _state, %Data{} = _data) do

@@ -34,6 +34,7 @@ defmodule Bib do
   end
 
   def add_torrent(torrent_file, download_location) do
+    # TODO probably move most of this into the Torrent process
     with {:ok, metainfo_binary} <- File.read(torrent_file),
          {:ok, decoded, <<>>} <- Bencode.decode(metainfo_binary),
          info_hash = MetaInfo.new(decoded),
