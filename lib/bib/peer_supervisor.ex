@@ -22,7 +22,7 @@ defmodule Bib.PeerSupervisor do
 
   def start_child(info_hash, peer_args) do
     server = name(info_hash)
-    DynamicSupervisor.start_child(server, {Bib.Peer, peer_args})
+    DynamicSupervisor.start_child(server, {Bib.PeerServer, peer_args})
   end
 
   def peers(info_hash) when is_info_hash(info_hash) do
@@ -30,7 +30,7 @@ defmodule Bib.PeerSupervisor do
 
     server
     |> DynamicSupervisor.which_children()
-    |> Enum.map(fn {:undefined, pid, :worker, [Bib.Peer]} -> pid end)
+    |> Enum.map(fn {:undefined, pid, :worker, [Bib.PeerServer]} -> pid end)
   end
 
   def name(info_hash) when is_info_hash(info_hash) do

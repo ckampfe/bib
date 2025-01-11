@@ -1,4 +1,4 @@
-defmodule Bib.Peer.Acceptor do
+defmodule Bib.AcceptorServer do
   @moduledoc """
   This process attempts to accept TCP connections from remote bittorrent peers.
 
@@ -11,7 +11,7 @@ defmodule Bib.Peer.Acceptor do
 
   use GenServer
 
-  alias Bib.{PeerServer, TorrentServer}
+  alias Bib.{PeerServer, TorrentServer, ListenerServer}
 
   require Logger
 
@@ -25,13 +25,13 @@ defmodule Bib.Peer.Acceptor do
 
   @impl GenServer
   def init(args) do
-    Process.set_label("Elixir.Bib.Peer.Acceptor ##{args[:i]}")
+    Process.set_label("Elixir.Bib.AcceptorServer ##{args[:i]}")
     {:ok, %State{}, {:continue, :get_listen_socket}}
   end
 
   @impl GenServer
   def handle_continue(:get_listen_socket, %State{} = state) do
-    {:ok, listen_socket} = Bib.Peer.Listener.get_listen_socket()
+    {:ok, listen_socket} = ListenerServer.get_listen_socket()
     state = %State{state | listen_socket: listen_socket}
     Process.send(self(), :accept, [])
     {:noreply, state}

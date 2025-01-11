@@ -38,8 +38,16 @@ defmodule Bib.PeerServer do
 
   @behaviour :gen_statem
 
-  alias Bib.{TorrentServer, Bitfield, PeerSupervisor, MetaInfo, PiecesServer, FileOps}
-  alias Bib.Peer.Protocol
+  alias Bib.{
+    TorrentServer,
+    Bitfield,
+    PeerSupervisor,
+    MetaInfo,
+    PiecesServer,
+    FileOps,
+    PeerProtocol
+  }
+
   import Bib.Macros
 
   require Logger
@@ -229,7 +237,7 @@ defmodule Bib.PeerServer do
 
   def handle_event(:internal, :send_bitfield, %State{} = _state, %Data{} = data) do
     {:ok, my_pieces} = PiecesServer.get(data.info_hash)
-    bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, my_pieces})
+    bitfield_encoded = PeerProtocol.encode({:bitfield, my_pieces})
     :ok = :gen_tcp.send(data.socket, bitfield_encoded)
     Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
     :keep_state_and_data
@@ -279,7 +287,7 @@ defmodule Bib.PeerServer do
       :ok = set_socket_opts(data.socket)
 
       {:ok, my_pieces} = PiecesServer.get(data.info_hash)
-      bitfield_encoded = Bib.Peer.Protocol.encode({:bitfield, my_pieces})
+      bitfield_encoded = PeerProtocol.encode({:bitfield, my_pieces})
       Logger.debug("sent bitfield: #{inspect(bitfield_encoded)}")
       :ok = :gen_tcp.send(data.socket, bitfield_encoded)
 
@@ -313,7 +321,7 @@ defmodule Bib.PeerServer do
   end
 
   def handle_event(:info, {:tcp, _socket, packet}, %State{} = _state, %Data{} = _data) do
-    peer_message = Bib.Peer.Protocol.decode(packet)
+    peer_message = PeerProtocol.decode(packet)
     {:keep_state_and_data, [{:next_event, :internal, {:peer_message, peer_message}}]}
   end
 
@@ -385,7 +393,7 @@ defmodule Bib.PeerServer do
 
         Enum.each(requests, fn request ->
           Logger.debug("requesting #{inspect(request)}")
-          encoded = Protocol.encode(request)
+          encoded = PeerProtocol.encode(request)
           :gen_tcp.send(data.socket, encoded)
         end)
 
@@ -484,7 +492,7 @@ defmodule Bib.PeerServer do
         length
       )
 
-    piece_message = Protocol.encode({:piece, index, begin, block})
+    piece_message = PeerProtocol.encode({:piece, index, begin, block})
 
     :ok = :gen_tcp.send(data.socket, piece_message)
 
@@ -554,7 +562,7 @@ defmodule Bib.PeerServer do
       # interested
       Logger.debug("I am interested")
 
-      encoded = Protocol.encode(:interested)
+      encoded = PeerProtocol.encode(:interested)
 
       :ok = :gen_tcp.send(data.socket, encoded)
 
@@ -579,7 +587,7 @@ defmodule Bib.PeerServer do
       # not interested
       Logger.debug("sending not interested")
 
-      encoded = Protocol.encode(:not_interested)
+      encoded = PeerProtocol.encode(:not_interested)
 
       Logger.debug("sent not interested #{inspect(encoded)}")
 
@@ -602,7 +610,7 @@ defmodule Bib.PeerServer do
   end
 
   def handle_event({:timeout, :keepalive_timer}, :ok, %State{} = _state, %Data{} = data) do
-    :ok = :gen_tcp.send(data.socket, Bib.Peer.Protocol.encode(:keepalive))
+    :ok = :gen_tcp.send(data.socket, PeerProtocol.encode(:keepalive))
 
     Logger.debug("sent keepalive")
 
@@ -613,7 +621,7 @@ defmodule Bib.PeerServer do
   end
 
   def handle_event(:cast, :choke, %State{} = state, %Data{} = data) do
-    choke = Protocol.encode(:choke)
+    choke = PeerProtocol.encode(:choke)
 
     :ok = :gen_tcp.send(data.socket, choke)
 
@@ -625,7 +633,7 @@ defmodule Bib.PeerServer do
   end
 
   def handle_event(:cast, :unchoke, %State{} = state, %Data{} = data) do
-    unchoke = Protocol.encode(:unchoke)
+    unchoke = PeerProtocol.encode(:unchoke)
 
     :ok = :gen_tcp.send(data.socket, unchoke)
 
@@ -638,7 +646,7 @@ defmodule Bib.PeerServer do
 
   def handle_event(:cast, {:have, index}, %State{} = _state, %Data{} = data) do
     Logger.debug("received have from torrent, updating own bitfield")
-    encoded = Protocol.encode({:have, index})
+    encoded = PeerProtocol.encode({:have, index})
     :ok = :gen_tcp.send(data.socket, encoded)
     {:keep_state, data}
   end

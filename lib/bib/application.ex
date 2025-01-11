@@ -25,7 +25,7 @@ defmodule Bib.Application do
               keys: :unique, name: Bib.Registry, partitions: System.schedulers_online()
             },
             {Task.Supervisor, name: Bib.TaskSupervisor},
-            {Bib.Peer.IncomingSupervisor, acceptors: System.schedulers_online(), port: port},
+            {Bib.IncomingSupervisor, acceptors: System.schedulers_online(), port: port},
             {Bib.TorrentsSupervisor, %{port: port}}
           ]
       end

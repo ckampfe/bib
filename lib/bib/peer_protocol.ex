@@ -1,4 +1,4 @@
-defmodule Bib.Peer.Protocol do
+defmodule Bib.PeerProtocol do
   @moduledoc """
   The peer protocol is used for sending and receiving data to and
   from remote peers over TCP.
