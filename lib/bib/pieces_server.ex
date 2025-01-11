@@ -5,12 +5,7 @@ defmodule Bib.PiecesServer do
   alias Bib.Bitfield
 
   def start_link(args) do
-    GenServer.start(__MODULE__, args)
-  end
-
-  @impl GenServer
-  def init(args) do
-    {:ok, args}
+    GenServer.start_link(__MODULE__, args, name: name(args.info_hash))
   end
 
   def insert(info_hash, pieces) when is_info_hash(info_hash) and is_bitstring(pieces) do
@@ -30,6 +25,12 @@ defmodule Bib.PiecesServer do
   end
 
   @impl GenServer
+  def init(args) do
+    Process.set_label("PiecesServer for #{Path.basename(args[:torrent_file])}")
+    {:ok, %{}}
+  end
+
+  @impl GenServer
   def handle_call({:insert, info_hash, pieces}, _from, state) do
     state = Map.put(state, info_hash, pieces)
     {:reply, :ok, state}
@@ -37,11 +38,8 @@ defmodule Bib.PiecesServer do
 
   @impl GenServer
   def handle_call({:get, info_hash}, _from, state) do
-    if pieces = Map.get(state, info_hash) do
-      {:reply, {:ok, pieces}, state}
-    else
-      {:reply, :error, state}
-    end
+    reply = Map.fetch(state, info_hash)
+    {:reply, reply, state}
   end
 
   @impl GenServer
@@ -69,7 +67,7 @@ defmodule Bib.PiecesServer do
     end
   end
 
-  defp name(info_hash) do
-    {:via, PartitionSupervisor, {Bib.PiecesPartitionSupervisor, info_hash}}
+  defp name(info_hash) when is_info_hash(info_hash) do
+    {:via, Registry, {Bib.Registry, {__MODULE__, info_hash}}}
   end
 end

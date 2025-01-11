@@ -20,6 +20,7 @@ defmodule Bib.TorrentSupervisor do
     Process.set_label("TorrentSupervisor for #{Path.basename(args[:torrent_file])}")
 
     children = [
+      {Bib.PiecesServer, args},
       {Bib.PeerSupervisor, args},
       {Bib.Torrent, args}
     ]

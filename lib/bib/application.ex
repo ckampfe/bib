@@ -7,6 +7,7 @@ defmodule Bib.Application do
 
   @impl true
   def start(_type, _args) do
+    # TODO make this configurable
     # port = 6881 + :rand.uniform(2 ** 15 - 6881)
     port = 6881
 
@@ -24,12 +25,6 @@ defmodule Bib.Application do
               keys: :unique, name: Bib.Registry, partitions: System.schedulers_online()
             },
             {Task.Supervisor, name: Bib.TaskSupervisor},
-            {
-              PartitionSupervisor,
-              child_spec: Bib.PiecesServer.child_spec(%{}),
-              name: Bib.PiecesPartitionSupervisor,
-              partitions: System.schedulers_online()
-            },
             {Bib.Peer.IncomingSupervisor, acceptors: System.schedulers_online(), port: port},
             {Bib.TorrentsSupervisor, %{port: port}}
           ]
