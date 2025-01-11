@@ -12,7 +12,7 @@ defmodule Bib.Peer.Acceptor do
   use GenServer
 
   alias Bib.Torrent
-  alias Bib.Peer
+  alias Bib.PeerServer
 
   require Logger
 
@@ -58,7 +58,7 @@ defmodule Bib.Peer.Acceptor do
            {:peername, :inet.peername(socket)},
          _ = Logger.debug("accepted connection from #{inspect(remote_peer_address)}"),
          {_, {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}} <-
-           {:receive_handshake, Peer.receive_handshake(socket)},
+           {:receive_handshake, PeerServer.receive_handshake(socket)},
          {_, true} <-
            {:torrent_accepting_connections?, Torrent.accepting_connections?(challenge_info_hash)},
          {_, {:ok, peer_id}} <- {:get_peer_id, Torrent.get_peer_id(challenge_info_hash)},
@@ -66,7 +66,7 @@ defmodule Bib.Peer.Acceptor do
            {:get_download_location, Torrent.get_download_location(challenge_info_hash)},
          {_, {:ok, peer_pid}} <-
            {:peer_accept,
-            Peer.accept_remote_peer_connection(challenge_info_hash, %Peer.InboundArgs{
+            PeerServer.accept_remote_peer_connection(challenge_info_hash, %PeerServer.InboundArgs{
               info_hash: challenge_info_hash,
               socket: socket,
               peer_id: peer_id,
@@ -76,7 +76,7 @@ defmodule Bib.Peer.Acceptor do
               remote_peer_port: remote_peer_port
             })},
          {_, :ok} <- {:controlling_process, :gen_tcp.controlling_process(socket, peer_pid)},
-         {_, :ok} <- {:send_handshake, Peer.handshake_peer(peer_pid)} do
+         {_, :ok} <- {:send_handshake, PeerServer.handshake_peer(peer_pid)} do
       Logger.debug(
         "Received handshake from peer id #{Base.encode64(remote_peer_id)}, with challenge info hash #{Base.encode64(challenge_info_hash)}"
       )

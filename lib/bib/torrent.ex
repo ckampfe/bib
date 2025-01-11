@@ -38,7 +38,7 @@ defmodule Bib.Torrent do
   @behaviour :gen_statem
 
   require Logger
-  alias Bib.{Bencode, MetaInfo, Peer, PeerSupervisor, FileOps, PiecesServer}
+  alias Bib.{Bencode, MetaInfo, PeerServer, PeerSupervisor, FileOps, PiecesServer}
   import Bib.Macros
 
   defmodule State do
@@ -85,7 +85,7 @@ defmodule Bib.Torrent do
   # https://www.erlang.org/doc/apps/kernel/pg.ht
   def send_to_peers_async(peers, message) when is_list(peers) do
     Enum.each(peers, fn peer ->
-      Peer.cast(peer, message)
+      PeerServer.cast(peer, message)
     end)
   end
 
@@ -315,12 +315,12 @@ defmodule Bib.Torrent do
         peer_ids =
           peers
           |> Enum.map(fn pid ->
-            Peer.remote_peer_id(pid)
+            PeerServer.remote_peer_id(pid)
           end)
           |> Enum.into(MapSet.new())
 
         if !MapSet.member?(peer_ids, remote_peer_id) do
-          Peer.connect(data.info_hash, %Peer.OutboundArgs{
+          PeerServer.connect(data.info_hash, %PeerServer.OutboundArgs{
             info_hash: data.info_hash,
             torrent_file: data.torrent_file,
             download_location: data.download_location,

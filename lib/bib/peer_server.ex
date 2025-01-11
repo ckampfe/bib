@@ -25,7 +25,7 @@
 # - [x] keepalive timer
 # - [x] figure out 16kB blocks for pieces
 # - [ ] report download and upload to torrent state process
-defmodule Bib.Peer do
+defmodule Bib.PeerServer do
   @moduledoc """
   This process handles the TCP connection and state for a single remote
   bittorrent peer for the given torrent.
