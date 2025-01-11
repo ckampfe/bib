@@ -38,7 +38,7 @@ defmodule Bib.PeerServer do
 
   @behaviour :gen_statem
 
-  alias Bib.{Torrent, Bitfield, PeerSupervisor, MetaInfo, PiecesServer, FileOps}
+  alias Bib.{TorrentServer, Bitfield, PeerSupervisor, MetaInfo, PiecesServer, FileOps}
   alias Bib.Peer.Protocol
   import Bib.Macros
 
@@ -515,7 +515,7 @@ defmodule Bib.PeerServer do
           "received all of piece #{index} and hashes match, sending have to Torrent process, and downloading another piece"
         )
 
-        :ok = Torrent.have(data.info_hash, index)
+        :ok = TorrentServer.have(data.info_hash, index)
 
         :ok = PiecesServer.set(data.info_hash, index)
 

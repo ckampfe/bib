@@ -11,8 +11,7 @@ defmodule Bib.Peer.Acceptor do
 
   use GenServer
 
-  alias Bib.Torrent
-  alias Bib.PeerServer
+  alias Bib.{PeerServer, TorrentServer}
 
   require Logger
 
@@ -60,10 +59,11 @@ defmodule Bib.Peer.Acceptor do
          {_, {:ok, %{challenge_info_hash: challenge_info_hash, remote_peer_id: remote_peer_id}}} <-
            {:receive_handshake, PeerServer.receive_handshake(socket)},
          {_, true} <-
-           {:torrent_accepting_connections?, Torrent.accepting_connections?(challenge_info_hash)},
-         {_, {:ok, peer_id}} <- {:get_peer_id, Torrent.get_peer_id(challenge_info_hash)},
+           {:torrent_accepting_connections?,
+            TorrentServer.accepting_connections?(challenge_info_hash)},
+         {_, {:ok, peer_id}} <- {:get_peer_id, TorrentServer.get_peer_id(challenge_info_hash)},
          {_, {:ok, download_location}} <-
-           {:get_download_location, Torrent.get_download_location(challenge_info_hash)},
+           {:get_download_location, TorrentServer.get_download_location(challenge_info_hash)},
          {_, {:ok, peer_pid}} <-
            {:peer_accept,
             PeerServer.accept_remote_peer_connection(challenge_info_hash, %PeerServer.InboundArgs{

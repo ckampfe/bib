@@ -1,6 +1,6 @@
 defmodule Bib do
   import Bib.Macros
-  alias Bib.Torrent
+  alias Bib.{Bencode, MetaInfo, TorrentServer}
 
   # big stuff to do:
   # - [ ] seeding
@@ -17,20 +17,18 @@ defmodule Bib do
   # - [x] get peers api
   # - [x] force announce api
 
-  alias Bib.{Bencode, MetaInfo}
-
   @moduledoc """
   Documentation for `Bib`.
   """
 
   def all_info_hashes do
     Registry.select(Bib.Registry, [
-      {{{Bib.Torrent, :"$1"}, :"$2", :_}, [], [:"$1"]}
+      {{{Bib.TorrentServer, :"$1"}, :"$2", :_}, [], [:"$1"]}
     ])
   end
 
   def torrent_metadata(info_hash) when is_info_hash(info_hash) do
-    Torrent.get_metadata(info_hash)
+    TorrentServer.get_metadata(info_hash)
   end
 
   def add_torrent(torrent_file, download_location) do
@@ -49,11 +47,11 @@ defmodule Bib do
   end
 
   def pause_torrent(info_hash) when is_info_hash(info_hash) do
-    Torrent.pause(info_hash)
+    TorrentServer.pause(info_hash)
   end
 
   def resume_torrent(info_hash) when is_info_hash(info_hash) do
-    Torrent.resume(info_hash)
+    TorrentServer.resume(info_hash)
   end
 
   def remove_torrent(info_hash) when is_info_hash(info_hash) do
@@ -63,15 +61,15 @@ defmodule Bib do
   end
 
   def get_peers(info_hash) when is_info_hash(info_hash) do
-    Torrent.get_peers(info_hash)
+    TorrentServer.get_peers(info_hash)
   end
 
   def force_announce(info_hash) when is_info_hash(info_hash) do
-    Torrent.force_announce(info_hash)
+    TorrentServer.force_announce(info_hash)
   end
 
   def verify_local_data(info_hash) when is_info_hash(info_hash) do
-    Torrent.verify_local_data(info_hash)
+    TorrentServer.verify_local_data(info_hash)
   end
 
   def s() do

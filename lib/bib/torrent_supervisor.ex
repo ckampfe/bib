@@ -22,7 +22,7 @@ defmodule Bib.TorrentSupervisor do
     children = [
       {Bib.PiecesServer, args},
       {Bib.PeerSupervisor, args},
-      {Bib.Torrent, args}
+      {Bib.TorrentServer, args}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)

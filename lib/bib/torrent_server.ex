@@ -26,7 +26,7 @@
 #
 # Peer -> TorrentState API
 
-defmodule Bib.Torrent do
+defmodule Bib.TorrentServer do
   @moduledoc """
   This process is the main location for a single torrent's state.
   Each torrent gets one of these processes.
@@ -141,7 +141,7 @@ defmodule Bib.Torrent do
 
   @impl :gen_statem
   def init(args) do
-    Process.set_label("Torrent for #{Path.basename(args[:torrent_file])}")
+    Process.set_label("TorrentServer for #{Path.basename(args[:torrent_file])}")
 
     state = %State{}
 
